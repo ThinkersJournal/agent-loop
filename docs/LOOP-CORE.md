@@ -107,9 +107,7 @@ A `CancellationToken` / `abort` grep in `agent/runner.rs` found no cancel API th
   **MSRV is not a blocker:** raising our minimum Rust version from 1.88 to 1.97.1 to take a dependency is permitted
   (CireSnave 2026-10-08: *"Feel free to raise the minimum Rust version on any project."*, as quoted in
   `C:\Projects\CLAUDE.md` section 9; PM restated 2026-11-03). It is a version note on our own crate, not a risk.
-- **This is still a recommendation.** Neither crate has been compiled here. **Next gate (out of scope for this note;
-  waits for the PM's go):** a throwaway spike that drives one `AgentRun` against a fake `Model` and round-trips it
-  through serde, before any dependency is added.
+- **This is still a recommendation.** The serde spike on `rig-agent`'s `AgentRun` **passed** (section 7, "Serde spike result"); `goose-agent` has not been compiled here. The adopt-or-fallback decision is the PM's.
 - **Do not adopt codex-rs as a dependency.** Use it as the reference for E (sandbox) and the app-server surface for G.
 - **TypeScript harnesses are G cases.** We supervise them; we do not embed them.
 
@@ -161,7 +159,29 @@ without reaching into loop internals. The list is in `docs/HARNESS-ADAPTER.md` (
 - That `goose-agent` compiles and runs a loop on our toolchain (Rust 1.88 per the seed `Cargo.toml`): not built.
 - `rig-agent`: read `run/mod.rs` (module doc, state, envelope, `next_step` doc, public method list), `agent/hook.rs`
   action enums, and `Cargo.toml`; **not read whole**: `agent/runner.rs`, `agent/engine.rs`, `run/streamed.rs`,
-  `examples/run_budget.rs`. No `AgentRun` was serialized or driven; resume is from its documentation and types, not a run.
+  `examples/run_budget.rs`. The read itself did not run anything; the spike below did.
 - That `goose-agent` supports mid-run injection (it appends via `AppendMessage` effects between passes by its README,
   not verified).
 - The 2026-11-03 date is the `pushed_at` timestamp `gh api` returned; the lane's clock said 2026-11-02.
+
+### Serde spike result (PM [TASK] 2026-11-03): PASS
+
+**Question:** does `rig-agent`'s `AgentRun` round-trip through serde and resume to the same result?
+**Version used:** `rig-agent` and `rig-core` 0.46.0 from crates.io (no git or path dependency), built with rustc 1.99.1 on Windows 11.
+The published crate's own `.cargo_vcs_info.json` records commit `6e039cd24994bc1e7d963af6f6278df73a81b130`
+(`crates/rig-agent`). **That is not `4908f428`**, the commit the "rig-agent read" above used, so the read and the spike are
+at different commits; the API calls the spike used match the read's names, and the read's line numbers were not re-checked.
+**Setup:** a throwaway crate outside the repo (nothing merged, no dependency kept). A fake model returns one `read` tool call
+on turn 1 and the text "done" on turn 2; the driver answers the call with a fixed result.
+**Measured:**
+- Control: the run driven to `Done` with no persistence: 4 messages, turn 2.
+- Four runs, each persisting the whole `AgentRun` to JSON text and reloading it at one step boundary (before the first
+  `next_step`; with the tool call pending; after the tool was answered; after the second model response). All four
+  finished with a history byte-identical (as JSON) to the control and the same turn count.
+- Each persisted run re-serialized byte-identically after reload (590, 940, 896 and 1110 bytes).
+- Negative controls: an extra unknown field is refused (`deny_unknown_fields`); changing the `format` field to 999 is refused.
+**Not measured:** a run persisted *after* `next_step` returned `CallModel` and before the response (the re-issue case in
+`next_step`'s doc); a pending invalid-tool-call resolution (documented as not resumable); a real provider, streaming
+(`run/streamed.rs`), hooks, or a run with several tool calls per turn; compile time or binary size. This shows the
+state machine survives serde in the simple path; it does not show the whole `rig-agent` runner is fit.
+**Cost found:** the spike needed `rig-core` as a direct dependency (`TurnPolicy`, `ModelTurn` inputs, `ToolName`), so adopting `rig-agent` means two crates, and `rig-memory` and `rig-http` come in transitively. `AgentRunStep` has exactly three variants at 0.46.0 (the compiler flagged a wildcard arm as unreachable).
