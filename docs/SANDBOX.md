@@ -13,10 +13,10 @@ What the loop host writes to make every tool call safe. Target API, not final na
 ```rust
 let policy = Policy::load("policy.toml")?                     // rules: commands, paths, network, secrets by name
     .with_asker(consent::hello());                            // how a person answers `Ask`
-let sandbox = Sandbox::select(Needs { network: Off, writable: ["./src"] }, Tier::Job)?;  // AntSpawn launcher, or refuse
+let sandbox = Sandbox::open_session(&session_id, Needs { network: Off, workspace: "./" })?;  // ONE AntSpawn job per agent session, or refuse
 let guard = Guard::new(policy, sandbox, Ledger::open("audit.jsonl")?);
 tools.policy(guard.clone());                                  // D|E seam: Policy::check before every execution
-// at run time, for each call:  Allow -> run (inside `sandbox` if the tool executes code)
+// at run time, for each call:  Allow -> run inside the session's sandbox (calls multiplexed into it)
 //                              Ask   -> person answers, answer is recorded, default on no answer = Deny
 //                              Deny  -> the model sees a result: "denied: <reason>"; nothing ran
 // every decision, including every Deny, is one line in audit.jsonl
@@ -117,8 +117,9 @@ gVisor-class runtimes, OpenHands' runtime, WASM sandboxes (Wasmtime), Firecracke
   subpaths), network, secrets by name.
 - **Ask: use the consent channel (`user-request` via AgentLife's `Consent` trait shape).** It exists, is published, fails closed
   and is bound to a subject hash. A new request kind for "tool call" is a cross-lane change (OverMind).
-- **The AntSpawn constraints shape the tiers** (section 4.2): the `account` launcher is one-at-a-time and copy-only, and a VM per
-  call is too heavy, so isolation cannot be uniform.
+- **The AntSpawn constraints shape the tiers** (section 5.2): today's launchers are one job at a time, copy-only (`account`) or a VM
+  per launch (`windows-sandbox`). PM ruling 2026-11-03: one job per tool call cannot be the only mode, so the default tier is
+  **session-scoped**, and what AntSpawn must gain for it is listed as asks in section 5.5.
 
 ## 5. Design
 
@@ -134,16 +135,24 @@ gVisor-class runtimes, OpenHands' runtime, WASM sandboxes (Wasmtime), Firecracke
 - Pure and deterministic: `check` takes the call and context and does no I/O except reading the loaded rules, so it is testable
   with the same negative-control style AntSpawn uses.
 
-### 5.2 Enforcement tiers (E2)
+### 5.2 Enforcement tiers (E2), session-scoped by ruling
+
+PM ruling 2026-11-03 (`[FIX]` on this note): a sandbox job per tool call is **not acceptable as the only mode** (latency per call,
+and copy-only breaks in-place edits). The design is **one sandbox job per agent session**: a persistent restricted workspace;
+tool calls are multiplexed inside it through the `ToolHost`, each one passing `Policy::check` first; job-per-call stays only as the
+high-risk tier.
 
 | Tier | For | Mechanism | Notes |
 |---|---|---|---|
-| 0 | Read-only and edit tools on declared workspace roots | Policy only (path rules) | Not a boundary against a bug in our tool code; acceptable only for tools we wrote and tested |
-| 1 | `shell` and other code-running tools | AntSpawn `account` launcher: restricted local account, kill-on-close Job Object, firewalled outbound, caps on time and RAM | One job at a time; copy-in/out of the workspace subset; setup is CireSnave's elevated step |
-| 2 | Untrusted or networked code | AntSpawn `windows-sandbox` launcher: throwaway VM, declared mounts only | Heavy per launch; GPU unmeasured |
+| S (default) | All tools of a session: `read`, `edit`, `write`, `search`, `shell`, MCP stdio servers the session starts | **One long-lived AntSpawn job per session**: a restricted workspace (the project tree or a working copy) plus a small tool executor inside it. The harness's `ToolHost` sends each allowed call in over a pipe; the job's account and Job Object, firewall and caps are the boundary, `Policy::check` is the per-call decision | **Needs AntSpawn changes (section 5.5, asks A1-A5). Until they exist this tier has no implementation.** In-place editing needs write-back or bind (ask A2) |
+| J (high risk) | Untrusted code, anything needing network | **Job per call**: AntSpawn `account` for restricted-but-offline code, `windows-sandbox` (throwaway VM) for untrusted or networked code | Exists today, with its limits: one job at a time, copy in/out, VM launch cost (section 3.1). Chosen per call by policy (`command` rules naming `tier = "J"`), never by default |
 
-`Sandbox::select(needs, tier)` calls AntSpawn's `providers(needs)` and **refuses with the unmet need named** if nothing certified is
-provisioned. It never falls back to a weaker launcher silently (the `naive` launcher is not an isolation tier).
+There is no policy-only tier for tools that execute code. File tools (`read`, `search`) may run host-side with path rules only
+**if** the session workspace is the project tree itself; that is a deliberate downgrade to be ruled on (section 6), not a default.
+
+`Sandbox::open_session(id, needs)` calls AntSpawn's `providers(needs)` and **refuses with the unmet need named** if no certified,
+provisioned launcher offers a session. It never falls back to a weaker launcher or to job-per-call silently (the `naive` launcher
+is not an isolation tier).
 
 ### 5.3 Audit
 
@@ -160,16 +169,42 @@ decision that could not be recorded is a `Deny`. Same format family as agentlife
   (`withdraw`) (`HARNESS-ADAPTER.md` 5.2).
 - **E|F:** audit lines are session-adjacent but not session data; they are not compacted away.
 
+### 5.5 Asks to AntSpawn (for the PM to route; this lane does not change AntSpawn)
+
+What Tier S needs that AntSpawn does not provide today. Evidence is `antspawn` `origin/main` `cc98a2c9`, `docs/DESIGN.md` (D),
+`CHANGELOG.md` (C), `matrix/launchers.tsv` (M), `ROADMAP.md` (R), read 2026-11-03. Each ask is a request for the AntSpawn lane to
+size and schedule, not a design for it.
+
+| # | Ask | Today (evidence) |
+|---|---|---|
+| A1 | **Long-lived job / session.** Open a session environment, run many `exec`s in it, close it. State persists between execs inside the session; the session is destroyed at close or crash | A job is create, run, collect, destroy: the launcher spools, runs, polls `exit.code`, deletes its dirs, and `serve` wipes the work dir before `exit.code` appears (D:28-33). The Job Object is kill-on-close per `exec` (D:30). `windows-sandbox` is one throwaway VM per run, `wsb stop` ends it (D:44-52) |
+| A2 | **In-place workspace with write-back or bind.** The agent edits files in its project and the changes reach the real tree, under policy, without per-call copy-in/out | `account`: "Copy, not bind... `rw` mounts are refused"; `C:\Projects` is ACL-denied to the account; outputs are copied out only for declared `[[output]]`s at the end (D:23-26). `windows-sandbox` can map declared `rw` folders (D:44-52) but is a VM per launch. Needs a design choice: bind with an ACL grant, or a session working copy with an explicit write-back step that applies a reviewed change set |
+| A3 | **Concurrency of N sessions.** Many agent sessions at once on one machine, isolated from each other | "One job at a time. The task ignores a second start while running" (D:37); `concurrent` is `no` for `naive`, `account` and `windows-sandbox` in the matrix, "no probe for this capability yet" (M); `windows-sandbox` runs one VM at a time, `CO_E_APPSINGLEUSE` (C:124); two suites at once serialise on the one runner account, 24-25 s vs 4.5-10 s (R row 25). Needs a probe for `concurrent`, and isolation **between** sessions (a session must not read another's workspace) |
+| A4 | **Cancel and kill at two grains.** Cancel one `exec` without ending the session; kill the whole session and everything in it | Only the whole job: kill-on-close Job Object (D:30), exit codes 124 time limit, 137 killed (D:92). No per-exec cancel. The loop's soft stop (`HARNESS-ADAPTER.md` 5.2) needs both |
+| A5 | **Audit stream.** Per-exec records as they happen: start, argument digest, exit, duration, bytes in/out, resource use; streamed output tail, not only at the end | Results exist only after the job: `spawn-result.json` plus the last 64 KiB of stdout/stderr, `account` streams only with a redeployed runner (D:92-99). `windows-sandbox` returns one combined stream (D:97). Nothing is emitted during the run |
+| A6 | **New certified capabilities with negative controls**: `clean-slate-next-session` and `no-read-other-session` (and a probe for `concurrent`) | `clean-slate-next-run` is certified `yes` for `account` and `windows-sandbox` by a `write+exists` probe (M; C:252-254). A persistent session deliberately keeps files between execs, so that capability's meaning does not carry over; AntSpawn's own rule is that a capability is off until a row says `yes` (README) |
+| A7 | **Per-exec time limit and per-session RAM cap** | `runner.toml` caps `time_s` and `ram_mb` per job; `cpu`, `gpu`, `network = "on"` refused (D:34-36) |
+
+Not asked for the first cut: network allowlists (stay `network.off` in Tier S; networked work goes to Tier J, D:36), GPU, secrets
+(AntSpawn refuses a spec that lists one, D:5; E's secret rules cover names only). Provisioning for N sessions will need CireSnave's
+elevated setup as `account` does today (D:19-22); that is the AntSpawn lane's to scope.
+
+**Consequence for sequencing:** Tier S cannot be built until A1-A3 exist; A4-A7 can follow. Until then the only runnable E2 is
+Tier J, which the PM has ruled is not enough on its own. This note therefore recommends the PM ask the AntSpawn lane to size A1-A3
+before any E implementation starts.
+
 ## 6. Open questions (for the PM, not decided)
 
-1. **Is a job-per-`shell`-call on the `account` launcher acceptable?** One at a time, copy-in/out, per-job setup unmeasured. If not,
-   Tier 1 needs either a long-lived restricted session per run (a change to AntSpawn's one-job model) or a measurement first
-   (ROADMAP row 13 leaves `account` unmeasured).
-2. **Workspace edits and the copy-only `account` launcher:** keep edits in Tier 0 (policy only) and run only `shell` in Tier 1 against
-   a copied workspace, then bring changes back as declared outputs? This is a product decision about what an edit-then-test loop looks like.
-3. **A "tool call" consent kind** needs the OverMind lane (`user-request` kinds are a closed set, CONSENT.md open question 1).
-4. **Who owns the audit reader** (the PM's pulse, AgentLife status, or a new command)?
-5. **Network allowlists** are not provided by any launcher read; requires an AntSpawn change or is out of scope for the first cut.
+1. **RULED (PM `[FIX]` 2026-11-03): job-per-call is not acceptable as the only mode; the design is session-scoped** (section 5.2).
+   This replaces the earlier open question about job-per-`shell`-call and the earlier idea of keeping edits policy-only and running only
+   `shell` in a copied workspace, both withdrawn.
+2. **Write-back or bind (ask A2)?** Binding gives true in-place edits but widens the sandbox account's reach into the project tree.
+   A session working copy with a reviewed write-back keeps the boundary but adds a step the agent must learn. Needs the PM, and likely
+   CireSnave (it changes who can write to project trees).
+3. **May file-only tools run host-side under path rules when the session workspace is the project tree?** A downgrade for speed; not assumed.
+4. **A "tool call" consent kind** needs the OverMind lane (`user-request` kinds are a closed set, CONSENT.md open question 1).
+5. **Who owns the audit reader** (the PM's pulse, AgentLife status, or a new command)?
+6. **Network allowlists** are not provided by any launcher read; out of scope for the first cut (Tier S has no network).
 
 ## 7. What I did not verify
 
@@ -179,3 +214,5 @@ decision that could not be recorded is a `Deny`. Same format family as agentlife
 - The `user-request` crate's current API and published version (AgentLife docs only; they cite 0.11.1 and 0.16).
 - That `Policy` with strictest-wins and examples-as-tests covers our real command set; no rule file was written or run.
 - Windows Sandbox network behaviour beyond the DESIGN.md text; GPU.
+- Whether Tier S is feasible on the `account` launcher at all (a long-lived Job Object per session, a per-session workdir under one account, or a per-session account): the asks state needs, not a mechanism; AntSpawn was not run or modified.
+- Line references (D:, C:, M, R) are to `cc98a2c9` and move with AntSpawn; re-read before acting on them.
