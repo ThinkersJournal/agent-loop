@@ -189,16 +189,25 @@ Not asked for the first cut: network allowlists (stay `network.off` in Tier S; n
 (AntSpawn refuses a spec that lists one, D:5; E's secret rules cover names only). Provisioning for N sessions will need CireSnave's
 elevated setup as `account` does today (D:19-22); that is the AntSpawn lane's to scope.
 
+**AntSpawn's sizing of A1-A3 (answered; do not re-ask).** `antspawn` `docs/SESSION-OPTIONS.md` at PR #67 head `657639969ec8` (open when read, state CLEAN; read through `gh api contents?ref=<sha>`, so re-check once it merges). Sizes are the AntSpawn lane's estimates in PR-sized slices, not measurements. Candidates are `account` and `windows-sandbox`; `naive` isolates nothing.
+
+| Ask | `account` | `windows-sandbox` | Needs a ruling |
+|---|---|---|---|
+| A1 session | feasible, 4 slices (way 2: a session host on a named pipe, DACL to the launcher SID only; way 1, a spool per exec, cannot stream and pins the runner) | feasible in principle, 3 slices; repeated `wsb exec` into one VM **unmeasured**; open costs about 10-25 s on the loaded host | no |
+| A2 in-place | B2 session working copy plus reviewed write-back, 4 slices; B1 bind by ACL grant, 1 slice plus a ruling (ACL ordering **not measured**) | B3 `rw` mapped folder, needs a probe, no review step | **yes, CireSnave** |
+| A3 N sessions | pool of N accounts, 4 slices plus one elevated paste per account; isolation between sessions **not yet run live** | **no**: one VM at a time (`CO_E_APPSINGLEUSE`, measured) | no, but N and the accounts are CireSnave's one-time setup |
+
+AntSpawn's order: A1 on `account` first, then A3, with A2 decided in parallel as a question. `windows-sandbox` stays Tier J. Side effects it names: a session can write the account's real profile by absolute path and that survives into the next session, so a profile wipe at close is needed; the pool built from the runner setup script would have network on unless the firewall rule is folded in; `ram_mb` is per job and `cpu` is refused, so one session can starve others (A7). A6's two capabilities each need a probe with a known-bad control.
+
 **Consequence for sequencing:** Tier S cannot be built until A1-A3 exist; A4-A7 can follow. Until then the only runnable E2 is
-Tier J, which the PM has ruled is not enough on its own. This note therefore recommends the PM ask the AntSpawn lane to size A1-A3
-before any E implementation starts.
+Tier J, which the PM has ruled is not enough on its own. A1-A3 are now sized (above); what remains is the PM's go and CireSnave's ruling on A2.
 
 ## 6. Open questions (for the PM, not decided)
 
 1. **RULED (PM `[FIX]` 2026-11-03): job-per-call is not acceptable as the only mode; the design is session-scoped** (section 5.2).
    This replaces the earlier open question about job-per-`shell`-call and the earlier idea of keeping edits policy-only and running only
    `shell` in a copied workspace, both withdrawn.
-2. **Write-back or bind (ask A2)?** Binding gives true in-place edits but widens the sandbox account's reach into the project tree.
+2. **Write-back or bind (ask A2)? AntSpawn has sized three options (B1 bind, B2 reviewed write-back, B3 VM `rw` map); the choice is still open.** Binding gives true in-place edits but widens the sandbox account's reach into the project tree.
    A session working copy with a reviewed write-back keeps the boundary but adds a step the agent must learn. Needs the PM, and likely
    CireSnave (it changes who can write to project trees).
 3. **May file-only tools run host-side under path rules when the session workspace is the project tree?** A downgrade for speed; not assumed.
@@ -216,3 +225,5 @@ before any E implementation starts.
 - Windows Sandbox network behaviour beyond the DESIGN.md text; GPU.
 - Whether Tier S is feasible on the `account` launcher at all (a long-lived Job Object per session, a per-session workdir under one account, or a per-session account): the asks state needs, not a mechanism; AntSpawn was not run or modified.
 - Line references (D:, C:, M, R) are to `cc98a2c9` and move with AntSpawn; re-read before acting on them.
+
+Added 2026-11-03: AntSpawn's sizing is read from its PR #67 head, not from `main`, and none of its unmeasured items (ACL ordering, repeated `wsb exec`, live isolation controls, copy-in time) were checked here.
