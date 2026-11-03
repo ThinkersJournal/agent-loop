@@ -103,10 +103,13 @@ A `CancellationToken` / `abort` grep in `agent/runner.rs` found no cancel API th
   the fallback.** Reasons, each with its evidence below: the state machine is already serializable and resumable, so
   a restarted lane resumes (the property G and AgentLife need); it owns no I/O, so our `Run` handle, soft stop and
   event stream are driver code we control; its `rig-agent` has about 96 times the downloads of `goose-agent` (474,731 against 4,929) and is a smaller bet than an alpha.
-  Costs: MSRV 1.97.1 (CireSnave 2026-10-08, via `C:\Projects\CLAUDE.md` section 9: raising a project's minimum Rust version
-  is permitted), pre-1.0 churn, and no mid-run injection (we deliver injected messages at a step boundary).
-- **This is still a recommendation.** Neither crate has been compiled here; the next gate is a throwaway spike that
-  drives one `AgentRun` against a fake `Model` and round-trips it through serde, before any dependency is added.
+  Costs: pre-1.0 churn, and no mid-run injection (we deliver injected messages at a step boundary).
+  **MSRV is not a blocker:** raising our minimum Rust version from 1.88 to 1.97.1 to take a dependency is permitted
+  (CireSnave 2026-10-08: *"Feel free to raise the minimum Rust version on any project."*, as quoted in
+  `C:\Projects\CLAUDE.md` section 9; PM restated 2026-11-03). It is a version note on our own crate, not a risk.
+- **This is still a recommendation.** Neither crate has been compiled here. **Next gate (out of scope for this note;
+  waits for the PM's go):** a throwaway spike that drives one `AgentRun` against a fake `Model` and round-trips it
+  through serde, before any dependency is added.
 - **Do not adopt codex-rs as a dependency.** Use it as the reference for E (sandbox) and the app-server surface for G.
 - **TypeScript harnesses are G cases.** We supervise them; we do not embed them.
 
