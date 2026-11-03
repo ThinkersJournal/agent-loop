@@ -131,7 +131,10 @@ one the run uses, and none is published.
 
 - **C|F:** `SessionStore` (4 verbs above). C owns what a record means; F owns ordering, atomicity and refusal.
 - **F|G:** session id and `Conflict` surface as G events; `resume` emits `started{resumed: true}`.
-- **F|E:** policy decisions are logged by reference; F stores, E decides.
+- **F|E:** policy decisions are logged by reference; F stores, E decides. **The session id keys the sandbox session**: the PM ruled
+  (2026-11-03, `SANDBOX.md` 5.2) that E runs one sandbox job per agent session, so the same id names the log, the snapshot and the
+  sandbox workspace. A `Sandbox` attach/close is a record in the log (`Event`), so a resume knows whether it must re-attach or
+  recreate (open question 5).
 - **F|H:** AgentLife never reads a session; it sees only adapter output (`HARNESS-ADAPTER.md`).
 
 ## 5. Open questions (for the PM, not decided)
@@ -141,7 +144,12 @@ one the run uses, and none is published.
 2. **Where sessions live** (one directory per machine like `.lane-state`, or per project) and **retention** (how long, how large).
 3. **Does C adopt rig-agent?** Decides rig-memory vs our own store; F follows C's spike.
 4. **Shared memory with Claude Code lanes:** is the existing file convention the contract, or does agent-loop get its own?
-5. **PersistAnt has no log/append abstraction that I read:** an append-with-expected-length primitive may be a PersistAnt feature
+5. **Resume versus the sandbox session.** After a harness restart, is the session's sandbox workspace re-attached (its files and
+   running processes survived) or recreated from the log and the last write-back? It depends on AntSpawn ask A1 (long-lived job,
+   `SANDBOX.md` 5.5): AntSpawn today destroys the environment at the end of a job (`antspawn` `docs/DESIGN.md:28-33` at `cc98a2c9`), so
+   a restart would lose uncommitted workspace state. Recommend: treat the workspace as recreatable and the log plus write-back as the
+   truth, until A1 says otherwise.
+6. **PersistAnt has no log/append abstraction that I read:** an append-with-expected-length primitive may be a PersistAnt feature
    request rather than something we build in this repo.
 
 ## 6. What I did not verify
