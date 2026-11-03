@@ -55,6 +55,25 @@ Not surveyed (name only, no claim): LangGraph, Pydantic AI, OpenAI Agents SDK, C
 crates (`harness-rs-loop`, `swarms-rs`). A web search surfaced `harness-rs-loop` 0.0.1 as MIT OR Apache-2.0; I did not
 open it.
 
+### Licence record (PM request 2026-11-03: from the LICENSE file at a commit, not the README)
+
+Root `LICENSE` read via `gh api repos/<repo>/contents/LICENSE?ref=<sha>`, 2026-11-03. This covers the repo-root file
+only; per-crate or per-directory licences (a subdirectory with its own terms) were **not** checked, and nothing
+should be adopted before they are.
+
+| Repo | Commit read | Root LICENSE text is |
+|---|---|---|
+| aaif-goose/goose | `cfb67d72` | Apache License 2.0 |
+| openai/codex | `f58acd6e` | Apache License 2.0 |
+| 0xPlaygrounds/rig | `4908f428` | MIT, "Copyright (c) 2024, Playgrounds Analytics Inc." |
+| modelcontextprotocol/rust-sdk | `b166e815` | Transition notice (new code Apache-2.0, older contributions MIT) then Apache-2.0 text; MIT-only contributions remain MIT |
+| agentclientprotocol/agent-client-protocol | `971b6cb7` | Apache License 2.0 |
+| anomalyco/opencode | `1bf08ae4` | MIT, "Copyright (c) 2025 opencode" |
+| earendil-works/pi | `9c9ce854` | MIT, "Copyright (c) 2025 Mario Zechner" |
+| OpenHands/OpenHands | `99439d7e` | MIT, "Copyright © 2025 OpenHands contributors" |
+
+These match the SPDX ids in the table above. Not checked: `harness-rs-loop`'s licence (seen only in a search result).
+
 ### Reading of the survey (a recommendation, not a ruling)
 
 - **No candidate is shown to satisfy the hello-world as is.** Two Rust candidates are close on different axes:
