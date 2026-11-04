@@ -1,0 +1,65 @@
+# Rig assessment (spike 2): rig-agent 0.46.0 against our needs and standards
+
+PM [TASK] 2026-11-04: inspect Rig and judge it against our standards before any library ruling. **This note rules
+nothing.** Spike code: `spikes/rig-assess/` (throwaway, own workspace, `publish = false`, not a dependency of anything).
+Built with rustc 1.99.1 on Windows 11; `rig-agent` and `rig-core` 0.46.0 from crates.io, models are rig's own
+`MockCompletionModel` (feature `test-utils`). Run: `cargo run` in `spikes/rig-assess`.
+
+## 1. The three points
+
+| Point | Result | What was measured |
+|---|---|---|
+| Persist after `CallModel` emitted | **PASS** | `AgentRun::new(..)` then `next_step()` gave `CallModel`; serialised (566 bytes), reloaded, re-serialised byte-identical. `agent.resume(reloaded)` against a fresh model finished with text `"3"` and a message history JSON-identical to an unpersisted control (4 messages). A second `next_step()` on a reloaded run re-emitted `CallModel` and `turn()` stayed 1 (no turn consumed). |
+| Streaming | **PASS on the mock, with a gap** | `agent.prompt(..).stream()` over a scripted stream gave 13 items in order: tool-call start, two argument deltas, tool-call end, `CompletionCall`, `ToolCall`, `ToolExecutionCommitted`, `ToolResult`, text start/text/end, `CompletionCall`, `FinalResponse`. `agent.resume(persisted).stream()` also finished with `"3"`. |
+| Real provider | **NOT DONE** | No provider credential was available to this lane, and no local model server answered on `localhost:11434`. I did not look for a key in the secret vault (the attempt was refused as credential exploration; I stopped). Needs a key or a local endpoint from the PM or CireSnave. Nothing here says anything about a real provider. |
+
+Failure legs, same mock: a hook returning `Stop` from `on_text_delta` ended the stream with `PromptError::Cancelled`, whose
+`chat_history` field holds the history (its docs say every tool call is answered). A stream cut by a transport error
+(`connection reset` after one text chunk) ended with a provider error; resuming the run persisted **before** the call
+then finished normally.
+
+**The gap:** the high-level runner hands back no `AgentRun`. After a stop or a cut the host has the error's history, not
+the run. A host that wants to persist at step boundaries mid-stream must either drive `AgentRun` itself (the sans-I/O
+path, which needs `prepare_request`, `StreamedTurnAssembler`, `record_streamed_completion_call` and `streamed_turn`: not
+built here) or persist the run before each model call as above and discard the partial stream. I found no accessor on the
+stream or runner (grep of `agent/runner.rs`, `agent/streaming.rs` for `AgentRun`: only `Resume(AgentRun)` as input); that is
+absence from a grep, not a proof.
+
+**Not measured:** a run persisted mid tool batch via the runner (the serde spike covered the sans-I/O path); several tool
+calls per turn; pending invalid-tool-call resolution (documented non-resumable); the sans-I/O streaming path; hooks other
+than the one stop; real token usage (the mock reports none, so `usage` printed all `None`); wall-clock or memory.
+
+## 2. Against our standards
+
+| Standard (source) | Finding | Evidence |
+|---|---|---|
+| Newest dependencies; MSRV may rise (CLAUDE.md s9) | Fine: 0.46.0 is current as of 2026-11-03 (crates.io); MSRV 1.97.1 is above our 1.88 and permitted to raise | LOOP-CORE s3 |
+| Crates.io, not git or path (s9) | Fine: both crates build from crates.io | `Cargo.toml` of the spike |
+| Test doubles ship in the public crates | **Concern.** `MockCompletionModel`, `MockAddTool` and the conformance suites live in `rig-core::test_utils` / `rig-agent::test_utils` behind feature `test-utils`; usable, but a feature of a published crate we would not want in a production build, and the way to script a model is a mock with no stable-API promise | `rig-core` `lib.rs:77-79` |
+| Pre-1.0 churn | **Concern.** 0.46.0; `RUN_FORMAT = 5` and a refusal of other formats mean a persisted run does not survive a rig upgrade that bumps it. `resume` docs: "The run must have been suspended by the same rig version." A lane restart across an upgrade loses in-flight runs unless we migrate | `agent/completion.rs` `resume` doc; LOOP-CORE s3 |
+| Footprint | Spike resolves **258 locked packages** (159 unique in `cargo tree -e normal`); rig's own are `rig-agent`, `rig-core`, `rig-derive`, `rig-http`, `rig-memory`. Compile of the spike from cold took over two minutes on this box | `Cargo.lock`, `cargo tree` |
+| Two crates needed | `rig-agent` alone is not enough: the driver needs `rig-core` types directly | Spike 1 (LOOP-CORE s7) |
+| At-least-once tool execution on resume | **Behaviour to design around.** `resume` docs: a tool that ran but whose result was not fed to the run runs again. Tools with side effects (E, D) need idempotence or a journal | `agent/completion.rs` `resume` doc |
+| Mid-run injection | Absent (LOOP-CORE s3); unchanged | LOOP-CORE s3 |
+| Static analysis | CodeRipper sweep of `rig-core` (`C:\Projects\.lane-state\rig-out\crates_rig-core.jsonl`): 193 lines parsed by me, of which 191 are `reachability`/`absence` findings (163 `info`, 28 `medium`) and 2 are run-summary lines. The PM's note says 209 findings and all 38 sampled were public-API constants with 0 real defects; **my count differs from 209 and I did not re-triage any finding**, so I neither confirm nor dispute that. Recall is unmeasured | the file |
+
+What I cannot judge from this spike: code quality beyond the surface I touched, soundness of `unsafe`, security of the HTTP
+layer, provider-specific behaviour, licence of transitive dependencies (the 258 were not checked against `deny.toml`).
+
+## 3. Goose, same three points (documentation only, not compiled)
+
+Read: `crates/goose-agent/README.md` on `aaif-goose/goose` main, 2026-11-04.
+
+| Point | What the README says | Status |
+|---|---|---|
+| Persist after the model call is emitted | The machine's behaviour is "a function of the persisted conversation, not of in-memory loop state"; `SessionLoader`/`EffectHandler` persist effects and the session is reloaded between passes. A crash before the inference result is applied re-runs inference. | Unverified; not built |
+| Streaming | `Emitter` streams `AgentEvent`s (`Message`, `Usage`, `MessageUsage`, `McpNotification`, `HistoryReplaced`) while a step runs | Unverified |
+| Real provider | Goes through goose's provider types (LOOP-CORE s3) | Unverified |
+
+One difference visible from the README alone: goose's resume state is the conversation (a format we would own), rig's is a
+versioned machine blob (a format rig owns). That is a consequence of the design described, not a measured result.
+
+## 4. Needed to finish the real-provider leg
+
+A provider key via the approved `with-secret` route (name and lane access set by the PM or CireSnave), or a local endpoint.
+Then: `rig-core` provider client, one tool call, streamed, persisted before the call, killed mid-stream, resumed.
