@@ -59,7 +59,11 @@ Read: `crates/goose-agent/README.md` on `aaif-goose/goose` main, 2026-11-04.
 One difference visible from the README alone: goose's resume state is the conversation (a format we would own), rig's is a
 versioned machine blob (a format rig owns). That is a consequence of the design described, not a measured result.
 
-## 4. Needed to finish the real-provider leg
+## 4. Real-provider leg
+
+`spikes/rig-assess/examples/openrouter.rs` (OpenRouter, free-tier model, key from `OPENROUTER_API_TOKEN`, never printed) is written and compiles; it has **not been run against a provider**. Its output goes in this section when the PM has run it.
+
+Originally needed:
 
 A provider key via the approved `with-secret` route (name and lane access set by the PM or CireSnave), or a local endpoint.
 Then: `rig-core` provider client, one tool call, streamed, persisted before the call, killed mid-stream, resumed.
