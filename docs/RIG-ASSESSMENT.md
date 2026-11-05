@@ -46,22 +46,14 @@ than the one stop; real token usage (the mock reports none, so `usage` printed a
 What I cannot judge from this spike: code quality beyond the surface I touched, soundness of `unsafe`, security of the HTTP
 layer, provider-specific behaviour, licence of transitive dependencies (the 258 were not checked against `deny.toml`).
 
-## 3. Goose, same three points (documentation only, not compiled)
+## 3. Goose, same three points
 
-Read: `crates/goose-agent/README.md` on `aaif-goose/goose` main, 2026-11-04.
-
-| Point | What the README says | Status |
-|---|---|---|
-| Persist after the model call is emitted | The machine's behaviour is "a function of the persisted conversation, not of in-memory loop state"; `SessionLoader`/`EffectHandler` persist effects and the session is reloaded between passes. A crash before the inference result is applied re-runs inference. | Unverified; not built |
-| Streaming | `Emitter` streams `AgentEvent`s (`Message`, `Usage`, `MessageUsage`, `McpNotification`, `HistoryReplaced`) while a step runs | Unverified |
-| Real provider | Goes through goose's provider types (LOOP-CORE s3) | Unverified |
-
-One difference visible from the README alone: goose's resume state is the conversation (a format we would own), rig's is a
-versioned machine blob (a format rig owns). That is a consequence of the design described, not a measured result.
+Measured in `GOOSE-ASSESSMENT.md` (spike 3, published `goose-agent` alpha.13). That note replaces the README-only reading
+that stood here: the README describes the snapshot at 1.58.0, whose approval and hook layers are not in the crate on crates.io.
 
 ## 4. Real-provider leg
 
-`spikes/rig-assess/examples/openrouter.rs` (OpenRouter, free-tier model, key from `OPENROUTER_API_TOKEN`, never printed) is written and compiles; it has **not been run against a provider**. Its output goes in this section when the PM has run it.
+`spikes/rig-assess/examples/openrouter.rs` (OpenRouter, free-tier model, key from `OPENROUTER_API_TOKEN`, never printed) is written and compiles; it has **not been run against a provider**. The PM's run (`.lane-state/openrouter-run.txt`) ended `with-secret: OPENROUTER_API_TOKEN not released - no answer before the wait ran out`, exit 2, so there is no output to record. Its output goes in this section when a run succeeds.
 
 Originally needed:
 
