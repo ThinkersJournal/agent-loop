@@ -1,0 +1,17 @@
+[package]
+name = "rig-assess-2"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+rig-agent = { version = "0.46.0", features = ["test-utils"] }
+rig-core = { version = "0.46.0", features = ["test-utils", "reqwest"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+[features]
+inject = []

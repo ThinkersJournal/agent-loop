@@ -29,6 +29,8 @@ absence from a grep, not a proof.
 calls per turn; pending invalid-tool-call resolution (documented non-resumable); the sans-I/O streaming path; hooks other
 than the one stop; real token usage (the mock reports none, so `usage` printed all `None`); wall-clock or memory.
 
+Spike 4 (`RIG-SPIKE-4.md`) measured the sans-I/O streaming path, several tool calls per turn, hooks other than the one stop, and usage with a mock that reports it. Real tokens and a real provider are still not measured.
+
 ## 2. Against our standards
 
 | Standard (source) | Finding | Evidence |

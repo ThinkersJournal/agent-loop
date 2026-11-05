@@ -1,0 +1,29 @@
+--- a/rig-agent/src/run/mod.rs
++++ b/rig-agent/src/run/mod.rs
+@@ -451,6 +451,26 @@
+         self.entries.push(entry);
+     }
+ 
++    /// Commit a host message (a user turn arriving mid-run) into the run's history.
++    ///
++    /// Valid only while the run is [`RunState::PreparingRequest`] or an unrecorded
++    /// [`RunState::AwaitingModel`] (the host dropped its stream; the next
++    /// [`Self::next_step`] re-issues the same attempt with this message as its prompt). Refused
++    /// elsewhere: inside a tool batch the message would land between an assistant tool call and its
++    /// result and break the pairing; after the attempt's completion call is recorded it would
++    /// be absent from that attempt's own request.
++    pub fn inject_message(&mut self, message: Message) -> Result<(), PromptError> {
++        match &self.state {
++            RunState::PreparingRequest { .. } | RunState::AwaitingModel { recorded: false } => {
++                self.history.commit([message]);
++                Ok(())
++            }
++            _ => Err(self.protocol_violation(
++                "inject_message called outside PreparingRequest / an unrecorded AwaitingModel",
++            )),
++        }
++    }
++
+     /// Every appended record, in append order.
+     pub fn entries(&self) -> &[Aside] {
+         &self.entries
