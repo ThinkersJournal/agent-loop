@@ -10,7 +10,7 @@ How to read the verdicts, for CireSnave's "lean Rig, keep the door open": **USE-
 "Seam" is the one of our traits (`Model`, `ToolHost`, `SessionStore`) that confines the item; where none does, it is a
 driver-side policy and says so.
 
-The driver under test is **ours**: `src/driver.rs`, 233 lines, uses only `rig_agent::run` (the sans-I/O state machine) and
+The driver under test is **ours**: `src/driver.rs`, 226 lines, uses only `rig_agent::run` (the sans-I/O state machine) and
 `rig-core` (model, streaming, messages). Rig's `Agent`/engine/hook stack is not involved except in items 5 and 6.
 
 ## 1. Results
@@ -146,7 +146,7 @@ All MIT, all MSRV 1.97.1 (ours is 1.88; raising is permitted, CLAUDE.md s9). Loc
 - **Replace the engine, keep Rig's state machine (verified):** items 1-4 use only `rig_agent::run`. The engine, hook stack, tool server, builder and `rig-memory` (about 9.3k + 6.7k
   non-test lines) are not needed for them.
 - **Replace `rig-agent` entirely, keep only `rig-core` (verified to build and run):** `extract-run-only.sh` copies `rig-agent/src/run` (4,123 lines excluding tests), removes the 7 `mod tests;`
-  lines and the one `PromptError::Memory` variant (the only reach into `rig-memory`), adds `http`, and builds against **`rig-core` alone** (cold build 1 m 37 s). `run-only-proof/` then runs the
+  lines and the one `PromptError::Memory` variant (the only reach into `rig-memory`), adds `http`, and builds against **`rig-core` alone** (cold build 1 m 37 s). `run-only-proof/` (its `driver.rs`/`hosts.rs` are byte-identical copies, checked with `cmp`) then runs the
   spike's unchanged driver on it: cut mid-stream and resume, and crash between tools with only the unanswered call re-running. The `run` module's own unit tests were dropped, not run.
 - **What the escape hatch costs us:** hooks (item 6) and the tool server are gone with the engine, so hooks, dispatch Patch/Deny and `on_outcome` become our code. Streaming
   assembly, pairing validation, the model/provider layer and all message types would still come from `rig-core` (78k non-test lines) and stay on its release train.

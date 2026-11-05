@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use rig_agent::run::{
-    AgentRun, AgentRunStep, ModelTurnOutcome, PendingToolCall, PromptError, RequestPatch, RunSpec,
+    AgentRun, AgentRunStep, PendingToolCall, RequestPatch, RunSpec,
     StreamedTurnAssembler, StreamedTurnEvent, prepare_request,
 };
 use rig_core::completion::{CompletionRequest, Message, ProviderCapabilities, ToolDefinition};
@@ -214,13 +214,6 @@ impl<'a> Driver<'a> {
         }
     }
 }
-
-pub fn first_user_text(m: &Message) -> String {
-    format!("{m:?}").chars().take(100).collect()
-}
-
-#[allow(dead_code)]
-pub fn _unused(_: &PromptError, _: &ModelTurnOutcome) {}
 
 /// Item 2 hook point: with the vendored patch this calls `AgentRun::inject_message`; stock builds do not have it.
 #[cfg(feature = "inject")]

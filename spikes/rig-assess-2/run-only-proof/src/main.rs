@@ -1,8 +1,7 @@
 //! Proof that the spike's driver (src/driver.rs, unchanged) runs on the extracted `run` module + rig-core only.
 //! No rig-agent engine, hooks, tool server or rig-memory in this build.
-#[path = "../../src/driver.rs"]
+// driver.rs and hosts.rs here are byte-for-byte copies of ../../src/driver.rs and ../../src/hosts.rs.
 mod driver;
-#[path = "../../src/hosts.rs"]
 mod hosts;
 
 use driver::{Driver, Kill};
