@@ -1,0 +1,19 @@
+[package]
+name = "goose-assess"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+goose-agent = "0.1.0-alpha.13"
+goose-provider-types = "0.1.0-alpha.13"
+rmcp = { version = "3.4.1", default-features = false, features = ["server"] }
+async-trait = "0.1"
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+goose-providers = "0.1.0-alpha.13"
