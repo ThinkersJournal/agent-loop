@@ -117,15 +117,29 @@ a call-id key is useless and the key would have to be content-derived (tool + ca
   leg A (streamed tool run, usage from the run), B (cut after 3 items, persist, resume on a new connection), C (abort after 2 items, re-issue with a message patched in).
   Key from the environment, never printed.
   `RP_PROVIDER=compat RP_BASE_URL=… RP_KEY_ENV=… RP_MODEL=…` selects any OpenAI-shaped `/chat/completions` endpoint
-  (`OpenAIConfig::new(key).with_base_url(url).with_route(Route::Chat)`); default is OpenRouter. **Not run: no output exists.** Its output belongs in
-  `RIG-ASSESSMENT.md` section 4 when the PM runs it under `with-secret`.
+  (`OpenAIConfig::new(key).with_base_url(url).with_route(Route::Chat)`); default is OpenRouter. **Run 2026-11-05 under `with-secret` (OpenRouter, one Windows Hello approval, key never printed; example source at `5151c7b`):**
+  - **`google/gemma-4-31b-it:free` (the default): no measurement.** All three legs got HTTP 429 `temporarily rate-limited upstream` (Google AI Studio shared pool);
+    0 stream items, `completion_calls=0`. The key authenticated; this is the free pool, not our code.
+  - **`nvidia/nemotron-3.5-lightning:free` (second run, same approval, a model that lists `tools` in `supported_parameters`):**
+    - **A** streamed tool run: `Done("42")`, 64 stream items, 2 completion calls, history 4 messages. Usage **read from the run, not the provider's dashboard**:
+      input 832, output 94, total 926, reasoning 55, cached 0, `cost.total` 0.0.
+    - **B** cut after 3 stream items, persisted (969 bytes), resumed on a new connection: `Done("42")`, `turn=2`, usage 830/92/922 (reasoning 53). The cut attempt's usage is not recorded, as on the mock.
+    - **C** abort after 2 items, re-issue with the message patched in: `Done("42")`, trace `sent(1 msg), aborted at item 2, sent(2 msgs), sent(3 msgs)`.
+      **The saved run does not contain the injected text (`false`)**, the same as the mock result in section 2: the stock path forgets the injection after a restart.
+      The final answer was `42` with no `DONE`, so this run does not show the model acting on the injection; that is not a finding about the path, only about this model and prompt.
+  - **Ollama, `qwen35-4b-cap32k:latest`** (`RP_PROVIDER=compat RP_BASE_URL=http://localhost:11434/v1`, a dummy key, no secret). Control first: `GET /v1/models` answered with the model list, which includes this id.
+    - **A** `Done("42")`, 60 stream items, 2 completion calls; usage 770/97/867, cached input 353 (no reasoning field, no cost).
+    - **B** cut after 3 items, persisted 969 bytes, resumed: `Done("42")`, `turn=2`, usage 770/92/862, cached 706.
+    - **C** `Done("42")`; trace shows **two requests after the abort-and-reissue** (`sent` 2 then 3 then 5 messages), where nemotron sent 2 then 3; I did not look into the extra round. Saved run contains the injected text: **`false`**, as on the mock and on nemotron.
+    - **Wall time:** 158 s for the whole run (A+B+C together, including `cargo run` start-up); the example prints no per-leg times, so none are recorded.
+  - **Limits:** one model per provider, one run per leg; no per-leg timing. Not measured: Lightbulb (`127.0.0.1:8080`, not up). Another free model was not tried. Gemma's 429s are no data, not a failure of the driver.
 - **OverMind has no chat endpoint to call.** At `OverMind` origin/main `2920f08`: a `git grep` over `src`, `*.md`, `pyproject.toml` for `http.server|HTTPServer|fastapi|uvicorn|aiohttp|flask|starlette|axum|serve_forever`
   returned **0 lines**; the same tree answers a positive control (`chat/completions` at `src/overmind/providers.py:743`). OverMind is an OpenAI-compatible **client**
   (`providers.py`: Groq, Google, OpenRouter, NVIDIA, Cloudflare, Ollama at `127.0.0.1:11434/v1`, Mistral, Hugging Face router). The "OpenAI-shaped claim" is
   therefore true only of the endpoints OverMind calls, and `LIGHTBULB-OPENAI-COMPAT-CHECKLIST.md` is a checklist for a server that does not exist in that repo.
   Two facts that bear on Rig: OverMind sends only `model, messages, temperature, max_tokens, tools` and **never `stream`** (checklist 1.4: "zero references to streaming"),
   so nothing OverMind does shows those endpoints stream; Rig's `Route::Chat` streams with `stream: true` and `stream_options.include_usage`. Whether a given OverMind provider honours that is unverified.
-  *Which server did the PM mean (Lightbulb? a local OverMind gateway)?* — if one exists, give me its base URL and the example runs unchanged.
+  *Answered by the PM 2026-11-05:* use Lightbulb (`127.0.0.1:8080`, not up) or Ollama (`localhost:11434/v1`); neither was reachable, so no local leg.
 
 ## 2. What forking Rig would take
 
