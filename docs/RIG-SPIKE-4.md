@@ -127,7 +127,12 @@ a call-id key is useless and the key would have to be content-derived (tool + ca
     - **C** abort after 2 items, re-issue with the message patched in: `Done("42")`, trace `sent(1 msg), aborted at item 2, sent(2 msgs), sent(3 msgs)`.
       **The saved run does not contain the injected text (`false`)**, the same as the mock result in section 2: the stock path forgets the injection after a restart.
       The final answer was `42` with no `DONE`, so this run does not show the model acting on the injection; that is not a finding about the path, only about this model and prompt.
-  - **Limits:** one model, one run per leg, free tier; no timing taken. Not measured: Ollama (`localhost:11434` was down when checked, no `/v1/models` control) and Lightbulb (not up). Another free model was not tried.
+  - **Ollama, `qwen35-4b-cap32k:latest`** (`RP_PROVIDER=compat RP_BASE_URL=http://localhost:11434/v1`, a dummy key, no secret). Control first: `GET /v1/models` answered with the model list, which includes this id.
+    - **A** `Done("42")`, 60 stream items, 2 completion calls; usage 770/97/867, cached input 353 (no reasoning field, no cost).
+    - **B** cut after 3 items, persisted 969 bytes, resumed: `Done("42")`, `turn=2`, usage 770/92/862, cached 706.
+    - **C** `Done("42")`; trace shows **two requests after the abort-and-reissue** (`sent` 2 then 3 then 5 messages), where nemotron sent 2 then 3; I did not look into the extra round. Saved run contains the injected text: **`false`**, as on the mock and on nemotron.
+    - **Wall time:** 158 s for the whole run (A+B+C together, including `cargo run` start-up); the example prints no per-leg times, so none are recorded.
+  - **Limits:** one model per provider, one run per leg; no per-leg timing. Not measured: Lightbulb (`127.0.0.1:8080`, not up). Another free model was not tried. Gemma's 429s are no data, not a failure of the driver.
 - **OverMind has no chat endpoint to call.** At `OverMind` origin/main `2920f08`: a `git grep` over `src`, `*.md`, `pyproject.toml` for `http.server|HTTPServer|fastapi|uvicorn|aiohttp|flask|starlette|axum|serve_forever`
   returned **0 lines**; the same tree answers a positive control (`chat/completions` at `src/overmind/providers.py:743`). OverMind is an OpenAI-compatible **client**
   (`providers.py`: Groq, Google, OpenRouter, NVIDIA, Cloudflare, Ollama at `127.0.0.1:11434/v1`, Mistral, Hugging Face router). The "OpenAI-shaped claim" is
