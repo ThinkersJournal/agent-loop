@@ -8,12 +8,17 @@
 //! inject queue, hooks and compaction.
 //! The traits still name rig-core request and stream types; wrapping them is a later slice.
 
+mod changeset;
 mod control;
 mod driver;
 mod journal;
 mod store;
 mod workspace;
 
+pub use changeset::{
+    ApplyError, Change, ChangeSet, Conflict, FileStamp, Kind, Manifest, RealTree, Reason, WorkCopy,
+    apply, diff, hash_bytes,
+};
 pub use control::RunControl;
 pub use driver::{Driver, DriverError, End, Model, ToolHost, ToolOutcome};
 pub use journal::Journal;
