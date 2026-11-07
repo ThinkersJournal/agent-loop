@@ -7,7 +7,6 @@ use agent_loop::{
     Driver, DriverError, End, MemoryStore, Model, RunControl, SessionStore, StoreError, ToolHost,
     ToolOutcome,
 };
-use rig_agent::run::RunSpec;
 use rig_core::completion::{CompletionRequest, ProviderCapabilities, ToolDefinition};
 use rig_core::error::ProviderError;
 use rig_core::message::ToolName;
@@ -75,10 +74,8 @@ impl ToolHost for Ping {
     }
 }
 
-fn spec() -> RunSpec {
-    let mut s = RunSpec::new();
-    s.max_turns = Some(4);
-    s
+fn spec() -> agent_loop::RunConfig {
+    agent_loop::RunConfig::new().max_turns(4)
 }
 
 fn requests_text(m: &Mock) -> Vec<String> {
@@ -114,11 +111,7 @@ async fn inject_reaches_the_model_on_every_later_turn() {
     assert!(reqs[0].contains("INJECTED-ONE"), "turn 1: {}", reqs[0]);
     assert!(reqs[1].contains("INJECTED-ONE"), "turn 2: {}", reqs[1]);
     // The run's own history is untouched: injected text lives in a host record, spliced per request.
-    assert!(
-        !serde_json::to_string(&run.full_history())
-            .unwrap()
-            .contains("INJECTED-ONE")
-    );
+    assert!(!run.history_json().unwrap().contains("INJECTED-ONE"));
 }
 
 #[tokio::test]
@@ -184,11 +177,7 @@ async fn soft_stop_finishes_the_batch_saves_and_resumes_with_the_queued_message(
         "no second model call after the stop"
     );
     // The batch was finished: the tool result is in the run.
-    assert!(
-        serde_json::to_string(&run.full_history())
-            .unwrap()
-            .contains("pong")
-    );
+    assert!(run.history_json().unwrap().contains("pong"));
     let store = d.store;
 
     let m2 = turn_two_only();

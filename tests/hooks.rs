@@ -6,7 +6,6 @@ use agent_loop::{
     Driver, End, Event, EventLog, Hook, MemoryStore, Model, ModelDecision, StopReason, ToolCall,
     ToolDecision, ToolHost, ToolOutcome,
 };
-use rig_agent::run::RunSpec;
 use rig_core::completion::{CompletionRequest, ProviderCapabilities, ToolDefinition};
 use rig_core::error::ProviderError;
 use rig_core::message::ToolName;
@@ -60,10 +59,8 @@ impl ToolHost for Ping {
     }
 }
 
-fn spec() -> RunSpec {
-    let mut s = RunSpec::new();
-    s.max_turns = Some(4);
-    s
+fn spec() -> agent_loop::RunConfig {
+    agent_loop::RunConfig::new().max_turns(4)
 }
 
 fn requests(m: &Mock) -> Vec<String> {

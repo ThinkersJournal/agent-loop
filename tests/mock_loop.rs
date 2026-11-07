@@ -6,7 +6,6 @@ use std::sync::Arc;
 use agent_loop::{
     Driver, DriverError, End, MemoryStore, Model, SessionStore, StoreError, ToolHost, ToolOutcome,
 };
-use rig_agent::run::RunSpec;
 use rig_core::completion::{CompletionRequest, ProviderCapabilities, ToolDefinition};
 use rig_core::error::ProviderError;
 use rig_core::message::ToolName;
@@ -62,10 +61,8 @@ impl ToolHost for Adder {
     }
 }
 
-fn spec() -> RunSpec {
-    let mut s = RunSpec::new();
-    s.max_turns = Some(3);
-    s
+fn spec() -> agent_loop::RunConfig {
+    agent_loop::RunConfig::new().max_turns(3)
 }
 
 /// Fails every save after `left` successful ones: a crash at a chosen step boundary.
@@ -95,7 +92,7 @@ async fn drives_to_done_and_snapshots() {
         End::Done("the answer is 3".into())
     );
     assert_eq!(d.tools.calls, ["t1"]);
-    assert_eq!(run.full_history().len(), 4);
+    assert_eq!(run.history_len(), 4);
     let (seq, json) = d.store.load("s").unwrap().expect("snapshot stored");
     assert_eq!(seq, 5, "CallModel, CallTools, answered, CallModel, Done");
     assert!(json.contains("the answer is 3"));
@@ -106,7 +103,7 @@ async fn resume_after_crash_matches_uninterrupted_run() {
     let mut d = Driver::new("s", model(), Adder::default(), MemoryStore::new(), spec());
     let mut run = d.open("add 1 and 2", 3).unwrap();
     d.drive(&mut run).await.unwrap();
-    let control = serde_json::to_string(&run.full_history()).unwrap();
+    let control = run.history_json().unwrap();
 
     // The store dies on the 4th save (the second CallModel): saves 1-3 were CallModel, CallTools, answered.
     let mut store = MemoryStore::new();
@@ -140,7 +137,7 @@ async fn resume_after_crash_matches_uninterrupted_run() {
         d3.tools.calls.is_empty(),
         "answered tool call must not re-run"
     );
-    assert_eq!(serde_json::to_string(&r3.full_history()).unwrap(), control);
+    assert_eq!(r3.history_json().unwrap(), control);
 }
 
 #[test]

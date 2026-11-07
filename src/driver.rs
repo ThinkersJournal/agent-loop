@@ -19,6 +19,7 @@ use crate::control::RunControl;
 use crate::events::{Event, EventSink};
 use crate::hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
 use crate::inbox::Inbox;
+use crate::run::{Run, RunConfig};
 use crate::store::{SessionStore, StoreError};
 
 /// Kind of the host record that carries an injected message inside the saved run.
@@ -109,7 +110,7 @@ pub struct Driver<M, T, S> {
     pub model: M,
     pub tools: T,
     pub store: S,
-    pub spec: RunSpec,
+    spec: RunSpec,
     session: String,
     seq: u64,
     control: RunControl,
@@ -121,12 +122,18 @@ pub struct Driver<M, T, S> {
 }
 
 impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
-    pub fn new(session: impl Into<String>, model: M, tools: T, store: S, spec: RunSpec) -> Self {
+    pub fn new(
+        session: impl Into<String>,
+        model: M,
+        tools: T,
+        store: S,
+        config: RunConfig,
+    ) -> Self {
         Self {
             model,
             tools,
             store,
-            spec,
+            spec: config.to_spec(),
             session: session.into(),
             seq: 0,
             control: RunControl::new(),
@@ -215,14 +222,16 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
     }
 
     /// Resume the stored run, or start one from `prompt`. An unreadable snapshot is an error, never a fresh start.
-    pub fn open(&mut self, prompt: &str, max_turns: usize) -> Result<AgentRun, DriverError> {
+    pub fn open(&mut self, prompt: &str, max_turns: usize) -> Result<Run, DriverError> {
         match self.store.load(&self.session)? {
             Some((seq, json)) => {
                 self.seq = seq;
                 self.resumed = true;
-                serde_json::from_str(&json).map_err(|e| DriverError::Snapshot(e.to_string()))
+                serde_json::from_str(&json)
+                    .map(Run)
+                    .map_err(|e| DriverError::Snapshot(e.to_string()))
             }
-            None => Ok(AgentRun::new(prompt).max_turns(max_turns)),
+            None => Ok(Run(AgentRun::new(prompt).max_turns(max_turns))),
         }
     }
 
@@ -261,11 +270,11 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
     }
 
     /// Drive `run` to `Done`, snapshotting at each boundary. Emits `Started` first, then one event per step, and `Error` if it fails.
-    pub async fn drive(&mut self, run: &mut AgentRun) -> Result<End, DriverError> {
+    pub async fn drive(&mut self, run: &mut Run) -> Result<End, DriverError> {
         self.emit(Event::Started {
             resumed: self.resumed,
         });
-        let out = self.drive_steps(run).await;
+        let out = self.drive_steps(&mut run.0).await;
         match &out {
             Ok(End::Done(_)) => self.emit(Event::Finished),
             Ok(End::Stopped) => self.emit(Event::Stopped),

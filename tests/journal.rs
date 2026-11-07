@@ -6,7 +6,6 @@ use agent_loop::{
     Driver, DriverError, End, Journal, MemoryStore, Model, SessionStore, StoreError, ToolHost,
     ToolOutcome,
 };
-use rig_agent::run::RunSpec;
 use rig_core::completion::{CompletionRequest, ProviderCapabilities, ToolDefinition};
 use rig_core::error::ProviderError;
 use rig_core::message::ToolName;
@@ -59,10 +58,8 @@ impl ToolHost for Bank {
     }
 }
 
-fn spec() -> RunSpec {
-    let mut s = RunSpec::new();
-    s.max_turns = Some(3);
-    s
+fn spec() -> agent_loop::RunConfig {
+    agent_loop::RunConfig::new().max_turns(3)
 }
 
 struct FailAfter<'a> {

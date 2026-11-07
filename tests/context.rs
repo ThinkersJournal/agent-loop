@@ -7,7 +7,6 @@ use agent_loop::{
     ContextPolicy, Driver, DriverError, End, Event, EventLog, KeepRecent, MemoryStore, Model,
     RunControl, ToolHost, ToolOutcome,
 };
-use rig_agent::run::RunSpec;
 use rig_core::completion::{CompletionRequest, ProviderCapabilities, ToolDefinition};
 use rig_core::error::ProviderError;
 use rig_core::message::{Message, ToolName};
@@ -67,10 +66,8 @@ impl ToolHost for Step {
     }
 }
 
-fn spec() -> RunSpec {
-    let mut s = RunSpec::new();
-    s.max_turns = Some(8);
-    s
+fn spec() -> agent_loop::RunConfig {
+    agent_loop::RunConfig::new().max_turns(8)
 }
 
 fn requests(m: &Mock) -> Vec<String> {
@@ -113,7 +110,7 @@ async fn old_turns_are_left_out_of_the_request_but_stay_in_the_run() {
     assert!(reqs[2].contains("RESULT-2") && !reqs[2].contains("RESULT-1"));
     assert!(reqs[1].contains("RESULT-1"));
     // The run is complete and untrimmed.
-    let history = serde_json::to_string(&run.full_history()).unwrap();
+    let history = run.history_json().unwrap();
     assert!(
         history.contains("RESULT-1")
             && history.contains("RESULT-2")
