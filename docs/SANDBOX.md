@@ -230,10 +230,14 @@ B2 cannot be provided, the open **fails** with the unmet need named, it never fa
 **Protected paths (proposal).** `.git`, `.github`, `.claude`, `CLAUDE.md` and hook files are protected in both modes, because a write to
 them changes what runs later outside the sandbox. Under B2 a change-set entry that touches one is **refused at write-back** (not merely
 flagged) unless the person approves that entry by name. Under B1 they are `path deny` entries in the policy and also **deny ACEs** on the
-real tree. **The ACE half depends on a probe that does not exist yet:** whether Windows applies an explicit deny entry ahead of the
-grant on the account. If a probe shows it does not, B1 cannot protect these paths at the file-system level, and B1 must then either
-grant only subfolders that exclude them or be refused for projects where they matter. This lane does not assume the outcome; it is an
-ask (A8 below).
+real tree. **The ACE half is measured once, by the AntSpawn lane** (`antspawn` `docs/MEASUREMENTS.md`, "2026-11-06: W0", `main` `cdcd1c8`, one
+sample per case, read 2026-11-06): an explicit grant on the tree beats the inherited `C:\Projects` deny, and an explicit deny on a
+subpath (`.git`) beats the grant: create, append and delete were refused and the file was still present on the host. **The deny must use
+exact rights** (`WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles` via `Set-Acl`):
+icacls `W` includes SYNCHRONIZE and made `.git` unreadable, so `git status` inside the session would fail. **Not measured:** rename or
+create-directory inside the denied path, `.git` replaced by a file or junction, files the account creates, grant cost on a large tree,
+and a grant surviving a crashed launcher. Until those are measured, B1's protection of these paths is a one-sample result, and the
+policy `path deny` entries stay as the second layer.
 
 **B2 write-back, concretely.**
 1. At open, the project (minus what policy excludes) is copied into the session workspace and a **base manifest** (path, size, content
@@ -267,8 +271,9 @@ happened. G: a pending write-back approval is `activity` `waiting{on: "approval"
   prove the removal path. It records which mode it ran in, in `spawn-result.json`.
 - **A3 pool of sessions**, unchanged. Isolation between sessions applies to both modes: under `bind` two sessions on one root are
   refused unless the person approves it.
-- **A8 (new) ACL probe.** Does an explicit deny ACE on `.git` and the other protected paths beat the account's grant on the parent?
-  A capability `bind-deny-beats-grant` with a known-bad control, per AntSpawn's rule that a capability is off until a row says `yes`.
+- **A8 (ACL ordering): answered, partly.** AntSpawn measured it (W0, above), one sample. What remains is the unmeasured list above
+  (rename, mkdir, junction, crash leaving the grant), which AntSpawn's session plan journals; a capability `bind-deny-beats-grant`
+  stays off until a row says `yes` with a known-bad control, per AntSpawn's own rule.
 
 **Slices, in this lane's order (each its own PR, each `[READY]`):**
 1. Mode types, the `[workspace]` policy setting, the approval binding (hash-bound, per project), and fail-closed selection; tested with a
@@ -276,9 +281,9 @@ happened. G: a pending write-back approval is `activity` `waiting{on: "approval"
 2. The B2 change-set engine against a fake working copy: manifest, diff, protected-path refusal, delete refusal, hash-match apply,
    conflict. This is pure file logic and runs on `cargo test`.
 3. B2 write-back as a tool call through `Policy` and the ledger, with the approval question surfaced as an `Ask`.
-4. The real `Sandbox` backend for both modes, **blocked on AntSpawn A1/A2** (and on A8 for the B1 protected-path claim).
+4. The real `Sandbox` backend for both modes, **blocked on AntSpawn A1/A2** (and on A8's unmeasured cases for a firm B1 protected-path claim).
 
-**What this addendum did not verify.** No ACL ordering (A8). No AntSpawn code, launcher or session was run. Whether copying a large
+**What this addendum did not verify.** The W0 ACL measurement was read, not re-run here. No AntSpawn code, launcher or session was run. Whether copying a large
 project tree at open is fast enough was not measured (AntSpawn's own copy-in time is unmeasured, 5.5). That a fixed list finds the
 `build.rs`-class files in real repos was not checked. The protected-path list is the PM's proposal and may need more entries (for
 example `.cargo/config.toml`, which can name a build runner).
