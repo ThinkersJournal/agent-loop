@@ -12,8 +12,13 @@ mod control;
 mod driver;
 mod journal;
 mod store;
+mod workspace;
 
 pub use control::RunControl;
 pub use driver::{Driver, DriverError, End, Model, ToolHost, ToolOutcome};
 pub use journal::Journal;
 pub use store::{MemoryStore, SessionStore, StoreError};
+pub use workspace::{
+    ApprovalStore, MemoryApprovals, PolicyError, Sandbox, SandboxError, Selection, Why, Workspace,
+    WorkspaceMode, open_workspace, policy_hash, requested_mode, select_mode,
+};
