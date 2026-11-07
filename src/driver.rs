@@ -16,6 +16,7 @@ use rig_core::tool::{ToolErrorKind, ToolExecutionError, ToolOutput, ToolResult};
 
 use crate::control::RunControl;
 use crate::events::{Event, EventSink};
+use crate::inbox::Inbox;
 use crate::store::{SessionStore, StoreError};
 
 /// Kind of the host record that carries an injected message inside the saved run.
@@ -110,6 +111,7 @@ pub struct Driver<M, T, S> {
     session: String,
     seq: u64,
     control: RunControl,
+    inbox: Option<Arc<dyn Inbox>>,
     sink: Option<Box<dyn EventSink>>,
     resumed: bool,
 }
@@ -124,6 +126,7 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             session: session.into(),
             seq: 0,
             control: RunControl::new(),
+            inbox: None,
             sink: None,
             resumed: false,
         }
@@ -138,6 +141,15 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
         if let Some(s) = &mut self.sink {
             s.emit(event);
         }
+    }
+
+    /// Deliver durable injections (`RunControl::inject_durable`) from `inbox`. At each model-call boundary pending messages
+    /// are copied into the run, the run is saved, and only then are they acknowledged; a message already in the run is
+    /// recognised by id and not added again.
+    pub fn with_inbox(mut self, inbox: Arc<dyn Inbox>) -> Self {
+        self.control.attach(inbox.clone(), self.session.clone());
+        self.inbox = Some(inbox);
+        self
     }
 
     /// The supervisor's handle: `inject` and `stop_soft`. Clones share one queue.
@@ -155,6 +167,33 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             }
             None => Ok(AgentRun::new(prompt).max_turns(max_turns)),
         }
+    }
+
+    /// Copy pending inbox messages that the run does not hold yet into it. Returns every pending id (to acknowledge after the
+    /// save). A failing inbox fails the drive: carrying on would silently skip messages a person was told were delivered.
+    fn pull_inbox(&mut self, run: &mut AgentRun, sent: usize) -> Result<Vec<u64>, DriverError> {
+        let Some(inbox) = &self.inbox else {
+            return Ok(vec![]);
+        };
+        let pending = inbox
+            .pending(&self.session)
+            .map_err(|e| rerr("inbox", &e))?;
+        let known: std::collections::HashSet<u64> = run
+            .entries_of(INJECT_KIND)
+            .filter_map(|a| a.value["id"].as_u64())
+            .collect();
+        let mut ids = Vec::new();
+        for q in pending {
+            ids.push(q.id);
+            if !known.contains(&q.id) {
+                run.append_entry(Aside::new(
+                    INJECT_KIND,
+                    Author::default(),
+                    serde_json::json!({ "at": sent, "text": q.text, "id": q.id }),
+                ));
+            }
+        }
+        Ok(ids)
     }
 
     /// Persist the run. Called at every step boundary; before any tool executes (write-ahead).
@@ -202,7 +241,12 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                             serde_json::json!({ "at": sent, "text": text }),
                         ));
                     }
+                    let delivered = self.pull_inbox(run, sent)?;
                     self.snapshot(run)?;
+                    // Acknowledge only after the save. A failed ack is safe: the message comes back and is recognised by id.
+                    if let Some(inbox) = &self.inbox {
+                        let _ = inbox.ack(&self.session, &delivered);
+                    }
                     if self.control.take_stop() {
                         return Ok(End::Stopped);
                     }
