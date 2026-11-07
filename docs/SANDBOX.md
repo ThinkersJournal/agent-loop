@@ -200,16 +200,95 @@ elevated setup as `account` does today (D:19-22); that is the AntSpawn lane's to
 AntSpawn's order: A1 on `account` first, then A3, with A2 decided in parallel as a question. `windows-sandbox` stays Tier J. Side effects it names: a session can write the account's real profile by absolute path and that survives into the next session, so a profile wipe at close is needed; the pool built from the runner setup script would have network on unless the firewall rule is folded in; `ram_mb` is per job and `cpu` is refused, so one session can starve others (A7). A6's two capabilities each need a probe with a known-bad control.
 
 **Consequence for sequencing:** Tier S cannot be built until A1-A3 exist; A4-A7 can follow. Until then the only runnable E2 is
-Tier J, which the PM has ruled is not enough on its own. A1-A3 are now sized (above); what remains is the PM's go and CireSnave's ruling on A2.
+Tier J, which the PM has ruled is not enough on its own. A1-A3 are now sized (above); A2 is ruled (6.2, design in 5.6); what remains is the PM's go to AntSpawn on A1 first.
+
+### 5.6 Workspace modes B1 and B2 (design addendum, 2026-11-06)
+
+Ruling: section 6 item 2. Everything marked "proposal" is the PM's proposal to this lane (2026-11-06), not a ruling by CireSnave.
+Nothing here is built; AntSpawn was not run or changed. Facts about AntSpawn come from section 3.1 and the sizing table in 5.5 (read at
+PR #67 head `657639969ec8`, not re-read on `main`).
+
+**One setting.** The harness passes the session's workspace mode as one value when it opens the session:
+`Sandbox::open_session(id, Needs { workspace: Workspace { root, mode } })` with `mode = Bind | CopyBack`. `CopyBack` is B2, `Bind` is B1.
+The same value is what the policy file's `[workspace] mode = "copy-back" | "bind"` sets, and what the person sees named at the approval
+prompt. There is no third value and no "auto".
+
+| | B2 `CopyBack` (default, proposal) | B1 `Bind` (opt-in) |
+|---|---|---|
+| What the sandbox account touches | A **working copy** of the project inside the session | The **real project folder**, through an ACL grant to the sandbox account |
+| How edits reach the real tree | A reviewed **change set** applied by a write-back step | Immediately, in place |
+| Review point | Write-back (a person or policy approves the change set) | Per call, by `Policy::check` only; there is no later review |
+| Boundary kept | Yes: the account never has rights on the real tree | **Widened**: the account can write what the grant covers, so a bad call is real damage |
+| AntSpawn cost (its estimate, 5.5) | A1 plus 4 slices | A1 plus 1 slice and a ruling; **ACL ordering (does a deny entry beat the grant) not measured** |
+
+**Choosing B1 (proposal).** Default is B2. B1 is used only when a policy setting selects it, per project or per session, **and a person
+has approved that policy file**. A policy file in a repository is untrusted until approved (5.1), so a cloned repo cannot switch itself to
+B1. The approval names the mode and the root it applies to, is bound to the file's hash (a changed file voids it, as in AgentLife's
+consent contract), and is remembered per project outside the repo. If the setting is absent, malformed or unapproved, the mode is B2; if
+B2 cannot be provided, the open **fails** with the unmet need named, it never falls back to B1.
+
+**Protected paths (proposal).** `.git`, `.github`, `.claude`, `CLAUDE.md` and hook files are protected in both modes, because a write to
+them changes what runs later outside the sandbox. Under B2 a change-set entry that touches one is **refused at write-back** (not merely
+flagged) unless the person approves that entry by name. Under B1 they are `path deny` entries in the policy and also **deny ACEs** on the
+real tree. **The ACE half depends on a probe that does not exist yet:** whether Windows applies an explicit deny entry ahead of the
+grant on the account. If a probe shows it does not, B1 cannot protect these paths at the file-system level, and B1 must then either
+grant only subfolders that exclude them or be refused for projects where they matter. This lane does not assume the outcome; it is an
+ask (A8 below).
+
+**B2 write-back, concretely.**
+1. At open, the project (minus what policy excludes) is copied into the session workspace and a **base manifest** (path, size, content
+   hash) is recorded; nothing under the real tree is touched.
+2. During the session all tools act on the copy. The ledger (5.3) records every call as before.
+3. At a boundary the loop chooses (end of run, on request, or at a policy-set interval) the harness computes the **change set**: files
+   added, modified, deleted, relative to the base manifest.
+4. **Deletes are refused unless a person approves them per file (proposal).** An approved delete is one ledger line naming the path.
+5. **Build scripts such as `build.rs`, `package.json` scripts, `Makefile` and CI files need explicit approval, not a ban
+   (proposal).** They are listed in the change set as "executable on a later step" so the approval names what it enables.
+6. Write-back **applies only if the real file still matches the base manifest** (hash) for each touched path; a mismatch is a
+   `Conflict` shown to the person, never an overwrite. This is the same "append only if unchanged" rule as `SessionStore` (`SESSION.md` 4.3).
+7. The apply step runs in the harness, as the user, not inside the sandbox, so the sandbox account never needs rights on the real tree.
+   Apply is a tool call that is itself `Ask` by default (5.1); the answer and the change-set hash are recorded.
+8. A session that ends without write-back leaves the real tree untouched; the working copy is destroyed with the session, and the log
+   plus the change set are what survive (`SESSION.md` open question 5, resolved the same way: the workspace is recreatable).
+
+**What the model sees.** Under B2 the agent is told its edits are staged until written back, so "done" means "proposed"; a tool
+`workspace.writeback` exists for it to request the boundary. Under B1 no such tool exists. The mode is part of the system context, so a
+model cannot assume the other one.
+
+**Seams.** D|E: `Policy::check` is unchanged; mode adds a `path` rule family (`deny` entries applying to both modes) and the approval
+binding above. F: the base manifest and the change set are session records (`Event`), so a resumed session knows whether write-back
+happened. G: a pending write-back approval is `activity` `waiting{on: "approval"}` (5.4).
+
+**Asks to AntSpawn for the PM to route (the mode is one setting the harness passes).** In order:
+- **A1 long-lived session**, first, unchanged from 5.5; both modes sit on it.
+- **A2 for both modes.** The launcher takes `workspace = { root, mode = "bind" | "copy-back" }`. `copy-back`: AntSpawn provides the
+  isolated working copy and **returns the change set** (it does not apply it; the harness applies it as the user). `bind`: AntSpawn
+  grants the account rights on `root` for the session and **removes the grant at close and on crash**, refusing to open if it cannot
+  prove the removal path. It records which mode it ran in, in `spawn-result.json`.
+- **A3 pool of sessions**, unchanged. Isolation between sessions applies to both modes: under `bind` two sessions on one root are
+  refused unless the person approves it.
+- **A8 (new) ACL probe.** Does an explicit deny ACE on `.git` and the other protected paths beat the account's grant on the parent?
+  A capability `bind-deny-beats-grant` with a known-bad control, per AntSpawn's rule that a capability is off until a row says `yes`.
+
+**Slices, in this lane's order (each its own PR, each `[READY]`):**
+1. Mode types, the `[workspace]` policy setting, the approval binding (hash-bound, per project), and fail-closed selection; tested with a
+   fake `Sandbox`. No AntSpawn needed.
+2. The B2 change-set engine against a fake working copy: manifest, diff, protected-path refusal, delete refusal, hash-match apply,
+   conflict. This is pure file logic and runs on `cargo test`.
+3. B2 write-back as a tool call through `Policy` and the ledger, with the approval question surfaced as an `Ask`.
+4. The real `Sandbox` backend for both modes, **blocked on AntSpawn A1/A2** (and on A8 for the B1 protected-path claim).
+
+**What this addendum did not verify.** No ACL ordering (A8). No AntSpawn code, launcher or session was run. Whether copying a large
+project tree at open is fast enough was not measured (AntSpawn's own copy-in time is unmeasured, 5.5). That a fixed list finds the
+`build.rs`-class files in real repos was not checked. The protected-path list is the PM's proposal and may need more entries (for
+example `.cargo/config.toml`, which can name a build runner).
 
 ## 6. Open questions (for the PM, not decided)
 
 1. **RULED (PM `[FIX]` 2026-11-03): job-per-call is not acceptable as the only mode; the design is session-scoped** (section 5.2).
    This replaces the earlier open question about job-per-`shell`-call and the earlier idea of keeping edits policy-only and running only
    `shell` in a copied workspace, both withdrawn.
-2. **Write-back or bind (ask A2)? AntSpawn has sized three options (B1 bind, B2 reviewed write-back, B3 VM `rw` map); the choice is still open.** Binding gives true in-place edits but widens the sandbox account's reach into the project tree.
-   A session working copy with a reviewed write-back keeps the boundary but adds a step the agent must learn. Needs the PM, and likely
-   CireSnave (it changes who can write to project trees).
+2. **RULED (CireSnave 2026-11-06, board 373 Q2, archived in `CIRESNAVE-DECIDED-ARCHIVE.md`), verbatim: *"373: B1 and B2.  I'd like the ability to do either one.  Lets build both and make it easy to choose one or the other."*** Build B1 (bind) and B2 (working copy with reviewed write-back); B3 is not built. The design is section 5.6. The PM's defaults and protections there are the PM's proposals, not his rulings.
 3. **May file-only tools run host-side under path rules when the session workspace is the project tree?** A downgrade for speed; not assumed.
 4. **A "tool call" consent kind** needs the OverMind lane (`user-request` kinds are a closed set, CONSENT.md open question 1).
 5. **Who owns the audit reader** (the PM's pulse, AgentLife status, or a new command)?

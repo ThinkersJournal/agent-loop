@@ -1,6 +1,6 @@
 [package]
 name = "agent-loop"
-version = "0.0.13"
+version = "0.0.15"
 edition = "2024"
 rust-version = "1.97.1"
 description = "Agent loop core: our Model, ToolHost and SessionStore traits and a driver over rig-agent's sans-I/O run. Early; not published."
