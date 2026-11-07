@@ -9,6 +9,7 @@ dependencies = [
  "futures",
  "rig-agent",
  "rig-core",
+ "serde",
  "serde_json",
  "tokio",
 ]
