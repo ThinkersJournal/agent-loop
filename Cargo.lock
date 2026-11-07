@@ -4,11 +4,12 @@ version = 4
 
 [[package]]
 name = "agent-loop"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "futures",
  "rig-agent",
  "rig-core",
+ "serde",
  "serde_json",
  "tokio",
 ]

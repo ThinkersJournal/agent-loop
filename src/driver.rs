@@ -24,7 +24,7 @@ pub trait Model {
 }
 
 /// What a tool call produced. A tool failure is a result the model sees, not a loop error.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolOutcome {
     pub text: String,
     pub is_error: bool,
