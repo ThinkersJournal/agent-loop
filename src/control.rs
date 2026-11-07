@@ -2,10 +2,13 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::inbox::{Inbox, InboxError};
+
 #[derive(Default)]
 struct State {
     queue: VecDeque<String>,
     stop: bool,
+    inbox: Option<(Arc<dyn Inbox>, String)>,
 }
 
 /// The verbs a supervisor has over a running [`crate::Driver`]: `inject` and `stop_soft`.
@@ -14,9 +17,9 @@ struct State {
 /// model-call boundary: the current step (a streaming turn, or a whole tool batch) always finishes first, so every open
 /// tool call is answered and the saved run is consistent.
 ///
-/// **Durability, stated plainly:** an injected message is kept in the saved run (as a host record) from the boundary
-/// that delivers it, or from the boundary at which a soft stop drains the queue. A message still in this in-memory queue
-/// when the process dies is lost; making `inject` write through to the session store is a later slice.
+/// **Durability, stated plainly:** [`inject`](Self::inject) keeps the message in memory until a model-call boundary copies it
+/// into the saved run, so a crash before that boundary loses it. [`inject_durable`](Self::inject_durable) writes it to the
+/// driver's [`Inbox`] first (see `Driver::with_inbox`), so it survives; the driver delivers it at the next boundary.
 #[derive(Clone, Default)]
 pub struct RunControl {
     state: Arc<Mutex<State>>,
@@ -32,6 +35,18 @@ impl RunControl {
         self.lock().queue.push_back(text.into());
     }
 
+    /// Like `inject`, but durable: the message is in the inbox when this returns, and the driver delivers it at its next
+    /// model-call boundary, also after a restart. Returns the inbox's id for it. Fails if the driver has no inbox.
+    pub fn inject_durable(&self, text: &str) -> Result<u64, InboxError> {
+        let attached = self.lock().inbox.clone();
+        match attached {
+            Some((inbox, session)) => inbox.append(&session, text),
+            None => Err(InboxError::Backend(
+                "no inbox attached to this driver".into(),
+            )),
+        }
+    }
+
     /// Ask the driver to stop at the next model-call boundary, after saving the run.
     pub fn stop_soft(&self) {
         self.lock().stop = true;
@@ -40,6 +55,10 @@ impl RunControl {
     /// Whether a soft stop has been requested and not yet taken.
     pub fn stop_requested(&self) -> bool {
         self.lock().stop
+    }
+
+    pub(crate) fn attach(&self, inbox: Arc<dyn Inbox>, session: String) {
+        self.lock().inbox = Some((inbox, session));
     }
 
     pub(crate) fn drain(&self) -> Vec<String> {
