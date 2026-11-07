@@ -15,6 +15,7 @@ use rig_core::streaming::CompletionStream;
 use rig_core::tool::{ToolErrorKind, ToolExecutionError, ToolOutput, ToolResult};
 
 use crate::control::RunControl;
+use crate::events::{Event, EventSink};
 use crate::inbox::Inbox;
 use crate::store::{SessionStore, StoreError};
 
@@ -111,6 +112,8 @@ pub struct Driver<M, T, S> {
     seq: u64,
     control: RunControl,
     inbox: Option<Arc<dyn Inbox>>,
+    sink: Option<Box<dyn EventSink>>,
+    resumed: bool,
 }
 
 impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
@@ -124,6 +127,19 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             seq: 0,
             control: RunControl::new(),
             inbox: None,
+            sink: None,
+            resumed: false,
+        }
+    }
+
+    /// Send this driver's [`Event`]s to `sink`. Without one, events are dropped. A sink never affects the run.
+    pub fn set_sink(&mut self, sink: impl EventSink + 'static) {
+        self.sink = Some(Box::new(sink));
+    }
+
+    fn emit(&mut self, event: Event) {
+        if let Some(s) = &mut self.sink {
+            s.emit(event);
         }
     }
 
@@ -146,6 +162,7 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
         match self.store.load(&self.session)? {
             Some((seq, json)) => {
                 self.seq = seq;
+                self.resumed = true;
                 serde_json::from_str(&json).map_err(|e| DriverError::Snapshot(e.to_string()))
             }
             None => Ok(AgentRun::new(prompt).max_turns(max_turns)),
@@ -186,8 +203,23 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
         Ok(())
     }
 
-    /// Drive `run` to `Done`, snapshotting at each boundary.
+    /// Drive `run` to `Done`, snapshotting at each boundary. Emits `Started` first, then one event per step, and `Error` if it fails.
     pub async fn drive(&mut self, run: &mut AgentRun) -> Result<End, DriverError> {
+        self.emit(Event::Started {
+            resumed: self.resumed,
+        });
+        let out = self.drive_steps(run).await;
+        match &out {
+            Ok(End::Done(_)) => self.emit(Event::Finished),
+            Ok(End::Stopped) => self.emit(Event::Stopped),
+            Err(e) => self.emit(Event::Error {
+                message: e.to_string(),
+            }),
+        }
+        out
+    }
+
+    async fn drive_steps(&mut self, run: &mut AgentRun) -> Result<End, DriverError> {
         loop {
             match run.next_step().map_err(|e| rerr("next_step", &e))? {
                 AgentRunStep::Done(resp) => {
@@ -219,6 +251,7 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                         return Ok(End::Stopped);
                     }
                     let (history, prompt, patch) = splice_injected(run, history, prompt);
+                    self.emit(Event::ModelCall { turn: turn as u64 });
                     let caps = self.model.capabilities();
                     let prepared = prepare_request(
                         &self.spec,
@@ -249,6 +282,10 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                         }
                     }
                     let response = stream.finish().await.map_err(|e| rerr("finish", &e))?;
+                    self.emit(Event::Usage {
+                        input: response.usage.input_tokens,
+                        output: response.usage.output_tokens,
+                    });
                     run.record_streamed_completion_call(
                         response.usage,
                         response.identity(),
@@ -266,10 +303,19 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                     for call in calls {
                         match call {
                             PendingToolCall::Execute(c) => {
+                                let id = c.id().to_string();
+                                self.emit(Event::ToolStarted {
+                                    id: id.clone(),
+                                    name: c.name().as_str().to_string(),
+                                });
                                 let out = self
                                     .tools
-                                    .call(&c.id().to_string(), c.name().as_str(), &c.arguments())
+                                    .call(&id, c.name().as_str(), &c.arguments())
                                     .await;
+                                self.emit(Event::ToolFinished {
+                                    id,
+                                    is_error: out.is_error,
+                                });
                                 let result = if out.is_error {
                                     ToolResult::failed(ToolExecutionError::new(
                                         ToolErrorKind::Other,
