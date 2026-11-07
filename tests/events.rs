@@ -82,6 +82,7 @@ async fn a_two_turn_run_emits_its_steps_in_order() {
             Event::Usage { .. } => "usage",
             Event::ToolStarted { .. } => "tool+",
             Event::ToolFinished { .. } => "tool-",
+            Event::Compacted { .. } => "compacted",
             Event::Stopped => "stopped",
             Event::Finished => "finished",
             Event::Error { .. } => "error",

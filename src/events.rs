@@ -33,6 +33,12 @@ pub enum Event {
         id: String,
         is_error: bool,
     },
+    /// A context policy sent fewer messages than the run holds for this call: `dropped` were left out, `kept` were sent
+    /// (prompt included). The run's own history is unchanged.
+    Compacted {
+        dropped: usize,
+        kept: usize,
+    },
     /// A soft stop was taken; the run is saved and resumable.
     Stopped,
     /// The run reached its final answer.
@@ -148,6 +154,7 @@ impl Status {
                     open: self.open_tools,
                 });
             }
+            Event::Compacted { .. } => {}
             Event::Stopped | Event::Finished => self.activity = Activity::Idle,
             Event::Error { .. } => self.activity = Activity::Failed,
         }

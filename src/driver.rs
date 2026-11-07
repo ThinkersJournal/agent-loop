@@ -14,6 +14,7 @@ use rig_core::message::Message;
 use rig_core::streaming::CompletionStream;
 use rig_core::tool::{ToolErrorKind, ToolExecutionError, ToolOutput, ToolResult};
 
+use crate::context::ContextPolicy;
 use crate::control::RunControl;
 use crate::events::{Event, EventSink};
 use crate::hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
@@ -114,6 +115,7 @@ pub struct Driver<M, T, S> {
     control: RunControl,
     inbox: Option<Arc<dyn Inbox>>,
     hook: Option<Box<dyn Hook>>,
+    context: Option<Box<dyn ContextPolicy>>,
     sink: Option<Box<dyn EventSink>>,
     resumed: bool,
 }
@@ -130,9 +132,50 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             control: RunControl::new(),
             inbox: None,
             hook: None,
+            context: None,
             sink: None,
             resumed: false,
         }
+    }
+
+    /// Install a [`ContextPolicy`] that shapes what each model call sends. The run's own history is never shortened; a
+    /// policy answer that breaks tool-call pairing is a drive error (the model is not called).
+    pub fn set_context_policy(&mut self, policy: impl ContextPolicy + 'static) {
+        self.context = Some(Box::new(policy));
+    }
+
+    /// Apply the context policy, if any, to the transcript for this call (prompt last). Emits `Compacted` when it shortens it.
+    #[allow(clippy::type_complexity)]
+    fn shape_context(
+        &mut self,
+        history: Vec<Arc<Message>>,
+        prompt: Arc<Message>,
+        patch: Option<RequestPatch>,
+    ) -> Result<(Vec<Arc<Message>>, Arc<Message>, Option<RequestPatch>), DriverError> {
+        let Some(policy) = &mut self.context else {
+            return Ok((history, prompt, patch));
+        };
+        let mut all = history;
+        all.push(prompt.clone());
+        let Some(mut shaped) = policy.shape(&all) else {
+            all.pop();
+            return Ok((all, prompt, patch));
+        };
+        match shaped.last() {
+            Some(last) if Arc::ptr_eq(last, &prompt) || **last == *prompt => {}
+            _ => {
+                return Err(DriverError::Run(
+                    "context policy dropped the turn's prompt (it must stay last)".into(),
+                ));
+            }
+        }
+        rig_core::conversation::pairing::validate(&shaped)
+            .map_err(|e| rerr("context policy", &e))?;
+        let (dropped, kept) = (all.len() - shaped.len(), shaped.len());
+        shaped.pop();
+        let patch = Some(RequestPatch::new().history(shaped.clone()));
+        self.emit(Event::Compacted { dropped, kept });
+        Ok((shaped, prompt, patch))
     }
 
     /// Install the host's [`Hook`]: stop before a model call, allow/patch/deny a tool call, rewrite its outcome, wrap up on stop.
@@ -272,6 +315,7 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                         return Ok(End::Stopped);
                     }
                     let (history, prompt, patch) = splice_injected(run, history, prompt);
+                    let (history, prompt, patch) = self.shape_context(history, prompt, patch)?;
                     self.emit(Event::ModelCall { turn: turn as u64 });
                     let caps = self.model.capabilities();
                     let prepared = prepare_request(
