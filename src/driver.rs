@@ -4,15 +4,21 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use rig_agent::run::{
-    AgentRun, AgentRunStep, PendingToolCall, RunSpec, StreamedTurnAssembler, StreamedTurnEvent,
-    prepare_request,
+    AgentRun, AgentRunStep, PendingToolCall, RequestPatch, RunSpec, StreamedTurnAssembler,
+    StreamedTurnEvent, prepare_request,
 };
 use rig_core::completion::{CompletionRequest, ProviderCapabilities, ToolDefinition};
+use rig_core::conversation::{Aside, Author};
 use rig_core::error::ProviderError;
+use rig_core::message::Message;
 use rig_core::streaming::CompletionStream;
 use rig_core::tool::{ToolErrorKind, ToolExecutionError, ToolOutput, ToolResult};
 
+use crate::control::RunControl;
 use crate::store::{SessionStore, StoreError};
+
+/// Kind of the host record that carries an injected message inside the saved run.
+const INJECT_KIND: &str = "host.inject";
 
 /// The B|C seam: open a streamed completion for a request.
 pub trait Model {
@@ -86,6 +92,8 @@ impl From<StoreError> for DriverError {
 #[derive(Debug, PartialEq, Eq)]
 pub enum End {
     Done(String),
+    /// A soft stop was taken at a model-call boundary. The run is saved and can be resumed with `open` + `drive`.
+    Stopped,
 }
 
 fn rerr(what: &str, e: &dyn std::fmt::Display) -> DriverError {
@@ -100,6 +108,7 @@ pub struct Driver<M, T, S> {
     pub spec: RunSpec,
     session: String,
     seq: u64,
+    control: RunControl,
 }
 
 impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
@@ -111,7 +120,13 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             spec,
             session: session.into(),
             seq: 0,
+            control: RunControl::new(),
         }
+    }
+
+    /// The supervisor's handle: `inject` and `stop_soft`. Clones share one queue.
+    pub fn control(&self) -> RunControl {
+        self.control.clone()
     }
 
     /// Resume the stored run, or start one from `prompt`. An unreadable snapshot is an error, never a fresh start.
@@ -145,7 +160,21 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                     history,
                     turn,
                 } => {
+                    // Boundary: queued messages become host records in the run, so the snapshot below carries them.
+                    // `at` is the position in the transcript this turn sends (history + prompt): later turns only append.
+                    let sent = history.len() + 1;
+                    for text in self.control.drain() {
+                        run.append_entry(Aside::new(
+                            INJECT_KIND,
+                            Author::default(),
+                            serde_json::json!({ "at": sent, "text": text }),
+                        ));
+                    }
                     self.snapshot(run)?;
+                    if self.control.take_stop() {
+                        return Ok(End::Stopped);
+                    }
+                    let (history, prompt, patch) = splice_injected(run, history, prompt);
                     let caps = self.model.capabilities();
                     let prepared = prepare_request(
                         &self.spec,
@@ -153,7 +182,7 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                         &history,
                         self.tools.definitions(),
                         run.output_tool_name(),
-                        None,
+                        patch.as_ref(),
                     )
                     .map_err(|e| rerr("prepare", &e))?;
                     run.advertise_tools(turn, prepared.tools.clone());
@@ -220,4 +249,31 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             }
         }
     }
+}
+
+/// Rebuild the request transcript with every saved `host.inject` record as a user message.
+///
+/// rig-agent has no way to append a message to a started run (RIG-SPIKE-4 item 2), so an injection lives in the run as a
+/// host record and is spliced into each request here. The run's own history is never changed, so `full_history()` does
+/// not contain injected text; the saved run does, and a resumed run splices it again.
+fn splice_injected(
+    run: &AgentRun,
+    history: Vec<Arc<Message>>,
+    prompt: Arc<Message>,
+) -> (Vec<Arc<Message>>, Arc<Message>, Option<RequestPatch>) {
+    let mut asides: Vec<&Aside> = run.entries_of(INJECT_KIND).collect();
+    if asides.is_empty() {
+        return (history, prompt, None);
+    }
+    asides.sort_by_key(|a| a.value["at"].as_u64().unwrap_or(0));
+    let mut all = history;
+    all.push(prompt);
+    for (n, a) in asides.iter().enumerate() {
+        let at = (a.value["at"].as_u64().unwrap_or(0) as usize + n).min(all.len());
+        let text = a.value["text"].as_str().unwrap_or_default();
+        all.insert(at, Arc::new(Message::user(text)));
+    }
+    let prompt = all.pop().expect("at least the prompt");
+    let patch = RequestPatch::new().history(all.clone());
+    (all, prompt, Some(patch))
 }
