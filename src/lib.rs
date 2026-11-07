@@ -14,6 +14,7 @@ mod driver;
 mod journal;
 mod store;
 mod workspace;
+mod writeback;
 
 pub use changeset::{
     ApplyError, Change, ChangeSet, Conflict, FileStamp, Kind, Manifest, RealTree, Reason, WorkCopy,
@@ -26,4 +27,8 @@ pub use store::{MemoryStore, SessionStore, StoreError};
 pub use workspace::{
     ApprovalStore, MemoryApprovals, PolicyError, Sandbox, SandboxError, Selection, Why, Workspace,
     WorkspaceMode, open_workspace, policy_hash, requested_mode, select_mode,
+};
+pub use writeback::{
+    Approver, Decision, Ledger, LedgerLine, MemoryLedger, TOOL_NAME, WriteBack, WriteBackTool,
+    WritePolicy, write_back,
 };
