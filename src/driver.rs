@@ -16,6 +16,7 @@ use rig_core::tool::{ToolErrorKind, ToolExecutionError, ToolOutput, ToolResult};
 
 use crate::control::RunControl;
 use crate::events::{Event, EventSink};
+use crate::hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
 use crate::inbox::Inbox;
 use crate::store::{SessionStore, StoreError};
 
@@ -112,6 +113,7 @@ pub struct Driver<M, T, S> {
     seq: u64,
     control: RunControl,
     inbox: Option<Arc<dyn Inbox>>,
+    hook: Option<Box<dyn Hook>>,
     sink: Option<Box<dyn EventSink>>,
     resumed: bool,
 }
@@ -127,8 +129,20 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             seq: 0,
             control: RunControl::new(),
             inbox: None,
+            hook: None,
             sink: None,
             resumed: false,
+        }
+    }
+
+    /// Install the host's [`Hook`]: stop before a model call, allow/patch/deny a tool call, rewrite its outcome, wrap up on stop.
+    pub fn set_hook(&mut self, hook: impl Hook + 'static) {
+        self.hook = Some(Box::new(hook));
+    }
+
+    fn wrap_up(&mut self, why: StopReason) {
+        if let Some(h) = &mut self.hook {
+            h.on_stop(&why);
         }
     }
 
@@ -248,6 +262,13 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                         let _ = inbox.ack(&self.session, &delivered);
                     }
                     if self.control.take_stop() {
+                        self.wrap_up(StopReason::Soft);
+                        return Ok(End::Stopped);
+                    }
+                    if let Some(h) = &mut self.hook
+                        && let ModelDecision::Stop(why) = h.before_model(turn as u64)
+                    {
+                        self.wrap_up(StopReason::Hook(why));
                         return Ok(End::Stopped);
                     }
                     let (history, prompt, patch) = splice_injected(run, history, prompt);
@@ -304,14 +325,41 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                         match call {
                             PendingToolCall::Execute(c) => {
                                 let id = c.id().to_string();
+                                let name = c.name().as_str().to_string();
+                                let args = c.arguments();
                                 self.emit(Event::ToolStarted {
                                     id: id.clone(),
-                                    name: c.name().as_str().to_string(),
+                                    name: name.clone(),
                                 });
-                                let out = self
-                                    .tools
-                                    .call(&id, c.name().as_str(), &c.arguments())
-                                    .await;
+                                let decision = match &mut self.hook {
+                                    Some(h) => h.before_tool(ToolCall {
+                                        id: &id,
+                                        name: &name,
+                                        args: &args,
+                                    }),
+                                    None => ToolDecision::Allow,
+                                };
+                                let out = match decision {
+                                    ToolDecision::Deny(why) => {
+                                        ToolOutcome::error(format!("denied: {why}"))
+                                    }
+                                    d => {
+                                        let run_args = match d {
+                                            ToolDecision::Patch(v) => v,
+                                            _ => args,
+                                        };
+                                        let out = self.tools.call(&id, &name, &run_args).await;
+                                        let call = ToolCall {
+                                            id: &id,
+                                            name: &name,
+                                            args: &run_args,
+                                        };
+                                        match &mut self.hook {
+                                            Some(h) => h.after_tool(call, &out).unwrap_or(out),
+                                            None => out,
+                                        }
+                                    }
+                                };
                                 self.emit(Event::ToolFinished {
                                     id,
                                     is_error: out.is_error,
