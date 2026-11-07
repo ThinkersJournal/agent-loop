@@ -6,13 +6,14 @@
 //! Slices 1-3: the seams, an in-memory store, a driver that snapshots at step boundaries, the idempotency
 //! [`Journal`], a [`RunControl`] handle (soft stop, inject, durable inject through an [`Inbox`]), and typed
 //! [`Event`]s with a [`Status`] fold, and a [`Hook`] (stop, allow/patch/deny a tool, rewrite its outcome, wrap-up).
-//! Not yet here: compaction.
+//! Disk-backed [`FileStore`] and [`FileInbox`] are here. Not yet here: compaction.
 //! The traits still name rig-core request and stream types; wrapping them is a later slice.
 
 mod changeset;
 mod control;
 mod driver;
 mod events;
+mod file;
 mod hook;
 mod inbox;
 mod journal;
@@ -27,6 +28,7 @@ pub use changeset::{
 pub use control::RunControl;
 pub use driver::{Driver, DriverError, End, Model, ToolHost, ToolOutcome};
 pub use events::{Activity, Event, EventLog, EventSink, Status, Step};
+pub use file::{FileInbox, FileStore};
 pub use hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
 pub use inbox::{Inbox, InboxError, MemoryInbox, Queued};
 pub use journal::Journal;
