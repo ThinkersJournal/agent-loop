@@ -7,7 +7,9 @@
 //! [`Journal`], a [`RunControl`] handle (soft stop, inject, durable inject through an [`Inbox`]), and typed
 //! [`Event`]s with a [`Status`] fold, a [`Hook`] (stop, allow/patch/deny a tool, rewrite its outcome, wrap-up), and a [`ContextPolicy`] (what each call sends).
 //! Disk-backed [`FileStore`] and [`FileInbox`] are here. Not yet here: summarising dropped turns.
-//! The traits still name rig-core request and stream types; wrapping them is a later slice.
+//! The run handle ([`Run`]) and its settings ([`RunConfig`]) are our own types; the `Model`, `ToolHost` and `ContextPolicy` traits
+//! still name rig-core types (`docs/WRAP.md`, stages 2 and 3, waiting for a consumer). A saved session is the engine's: a different
+//! engine cannot resume it.
 
 mod changeset;
 mod context;
@@ -18,6 +20,7 @@ mod file;
 mod hook;
 mod inbox;
 mod journal;
+mod run;
 mod store;
 mod workspace;
 mod writeback;
@@ -34,6 +37,7 @@ pub use file::{FileInbox, FileStore};
 pub use hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
 pub use inbox::{Inbox, InboxError, MemoryInbox, Queued};
 pub use journal::Journal;
+pub use run::{Run, RunConfig};
 pub use store::{MemoryStore, SessionStore, StoreError};
 pub use workspace::{
     ApprovalStore, MemoryApprovals, PolicyError, Sandbox, SandboxError, Selection, Why, Workspace,

@@ -9,7 +9,6 @@ use agent_loop::{
     Driver, End, FileInbox, FileStore, Inbox, Model, SessionStore, StoreError, ToolHost,
     ToolOutcome,
 };
-use rig_agent::run::RunSpec;
 use rig_core::completion::{CompletionRequest, ProviderCapabilities, ToolDefinition};
 use rig_core::error::ProviderError;
 use rig_core::streaming::CompletionStream;
@@ -192,10 +191,8 @@ impl ToolHost for NoTools {
         ToolOutcome::error("no tools")
     }
 }
-fn spec() -> RunSpec {
-    let mut s = RunSpec::new();
-    s.max_turns = Some(4);
-    s
+fn spec() -> agent_loop::RunConfig {
+    agent_loop::RunConfig::new().max_turns(4)
 }
 fn text_turn() -> Mock {
     Mock(MockCompletionModel::from_stream_turns([vec![
