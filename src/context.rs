@@ -9,7 +9,8 @@
 //! result, a call left unanswered, or a missing final message) is a drive error and the model is not called: sending a
 //! history a provider would reject, or silently sending everything, are both worse than stopping.
 //!
-//! Not here: summarising the dropped turns. That needs a model call, so it is a driver step of its own, not a policy.
+//! Not here: summarising the dropped turns. That needs a model call, so it is a driver step of its own, not a policy: see
+//! [`Summarise`] and `Driver::set_summariser`.
 
 use std::sync::Arc;
 
@@ -48,4 +49,17 @@ impl ContextPolicy for KeepRecent {
         out.extend_from_slice(&transcript[start..]);
         Some(out)
     }
+}
+
+/// Settings for `Driver::set_summariser`: the same cut as [`KeepRecent`], but what falls out is summarised by the model rather
+/// than dropped.
+#[derive(Clone, Copy, Debug)]
+pub struct Summarise {
+    /// Messages kept from the start (the task). 1, the opening user message, is the usual value.
+    pub head: usize,
+    /// Messages kept from the end, moved forward to a turn boundary.
+    pub tail: usize,
+    /// Refresh the summary only once at least this many messages have newly fallen out of the kept tail (at least 1). A larger
+    /// value means fewer summary calls and more unsummarised messages sent between them.
+    pub every: usize,
 }
