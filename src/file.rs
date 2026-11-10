@@ -9,7 +9,8 @@
 //!   sequence. A second writer that read the same sequence loses the publish and gets `Conflict`, which is the store's
 //!   optimistic-sequence rule enforced by the filesystem. The newest two snapshots are kept; older ones are removed.
 //! - [`FileInbox`] keeps one file per message (`<id>.msg`) and an empty `<id>.ack` marker once acknowledged. Messages are never
-//!   deleted, so an id is never reused, also after a restart. (Pruning acknowledged messages is a later change.)
+//!   deleted by `append`, `pending` or `ack`, so an id is never reused, also after a restart. [`FileInbox::prune`] removes
+//!   acknowledged messages on request, and always keeps the highest id so that rule still holds.
 //!
 //! Session ids are encoded into file names (see `encode`: lowercase letters, digits, `-` and `_` are kept, every other byte
 //! becomes `%XX`, and a fixed prefix keeps it clear of Windows device names), so an id cannot name a path outside the directory
@@ -165,6 +166,33 @@ impl FileInbox {
     fn session_dir(&self, session: &str) -> Result<PathBuf, InboxError> {
         let name = encode(session).ok_or_else(|| InboxError::Backend("empty session id".into()))?;
         Ok(self.dir.join(name))
+    }
+
+    /// Delete this session's acknowledged messages and their markers; return how many messages went. Unacknowledged messages
+    /// are never touched. The highest-numbered message is kept even when acknowledged: it is what `append` reads to pick the
+    /// next id, so deleting it would let an id be reused. A crash part-way leaves at worst an orphan marker, which is ignored.
+    pub fn prune(&self, session: &str) -> Result<usize, InboxError> {
+        let sdir = self.session_dir(session)?;
+        let msgs = Self::ids(&sdir, ".msg")?;
+        let acked: std::collections::HashSet<u64> = Self::ids(&sdir, ".ack")?.into_iter().collect();
+        let newest = msgs.last().copied();
+        let mut removed = 0;
+        for id in msgs {
+            if Some(id) == newest || !acked.contains(&id) {
+                continue;
+            }
+            // The message first: a marker with no message is harmless, a message with no marker would be delivered again.
+            fs::remove_file(sdir.join(format!("{id:020}.msg"))).map_err(io)?;
+            fs::remove_file(sdir.join(format!("{id:020}.ack"))).map_err(io)?;
+            removed += 1;
+        }
+        // Markers whose message is already gone (an interrupted prune, or an ack for a message pruned since).
+        for id in acked {
+            if !sdir.join(format!("{id:020}.msg")).exists() {
+                let _ = fs::remove_file(sdir.join(format!("{id:020}.ack")));
+            }
+        }
+        Ok(removed)
     }
 
     /// Message ids present in `sdir` with the given extension, ascending.

@@ -172,6 +172,53 @@ fn inbox_orders_acknowledges_and_never_reuses_an_id() {
     ));
 }
 
+#[test]
+fn prune_removes_acknowledged_messages_but_keeps_the_newest_so_ids_are_not_reused() {
+    let d = Dir::new();
+    let ib = FileInbox::new(d.sub("i")).unwrap();
+    assert_eq!(ib.prune("none").unwrap(), 0, "no such session");
+    let ids: Vec<u64> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|t| ib.append("s", t).unwrap())
+        .collect();
+    // a, b and c acknowledged; d (the newest) is not. Pruning removes the three and never touches d.
+    ib.ack("s", &ids[..3]).unwrap();
+    assert_eq!(ib.prune("s").unwrap(), 3);
+    let p = ib.pending("s").unwrap();
+    assert_eq!(p.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["d"]);
+    let sdir = std::fs::read_dir(d.sub("i"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.is_dir())
+        .unwrap();
+    let left = |dir: &std::path::Path| {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(left(&sdir), [format!("{:020}.msg", ids[3])]);
+
+    // Acknowledge the newest too: it is kept, with its marker, so the next id is still higher than every earlier one.
+    ib.ack("s", &ids[3..]).unwrap();
+    assert_eq!(ib.prune("s").unwrap(), 0, "the newest is kept");
+    assert!(ib.pending("s").unwrap().is_empty());
+    let next = ib.append("s", "e").unwrap();
+    assert!(next > ids[3], "{next} must not reuse {}", ids[3]);
+    // A restart changes nothing, and an ack of a pruned id is ignored.
+    let again = FileInbox::new(d.sub("i")).unwrap();
+    again.ack("s", &[ids[0]]).unwrap();
+    assert_eq!(again.pending("s").unwrap().len(), 1);
+    assert_eq!(
+        again.prune("s").unwrap(),
+        1,
+        "d is now prunable, e is newest"
+    );
+    assert_eq!(left(&sdir), [format!("{next:020}.msg")]);
+}
+
 #[derive(Clone)]
 struct Mock(MockCompletionModel);
 impl Model for Mock {
