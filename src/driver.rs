@@ -14,7 +14,7 @@ use rig_core::message::Message;
 use rig_core::streaming::CompletionStream;
 use rig_core::tool::{ToolErrorKind, ToolExecutionError, ToolOutput, ToolResult};
 
-use crate::context::ContextPolicy;
+use crate::context::{ContextPolicy, Summarise};
 use crate::control::RunControl;
 use crate::events::{Event, EventSink};
 use crate::hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
@@ -105,6 +105,13 @@ fn rerr(what: &str, e: &dyn std::fmt::Display) -> DriverError {
     DriverError::Run(format!("{what}: {e}"))
 }
 
+/// The cached summary of the turns a cut dropped: it covers the transcript up to (not including) `covered`.
+#[derive(Clone, Default)]
+struct SummaryState {
+    covered: usize,
+    text: Option<String>,
+}
+
 /// Runs one session over our three traits.
 pub struct Driver<M, T, S> {
     pub model: M,
@@ -117,6 +124,7 @@ pub struct Driver<M, T, S> {
     inbox: Option<Arc<dyn Inbox>>,
     hook: Option<Box<dyn Hook>>,
     context: Option<Box<dyn ContextPolicy>>,
+    summary: Option<(Summarise, SummaryState)>,
     sink: Option<Box<dyn EventSink>>,
     resumed: bool,
 }
@@ -140,6 +148,7 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
             inbox: None,
             hook: None,
             context: None,
+            summary: None,
             sink: None,
             resumed: false,
         }
@@ -149,6 +158,111 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
     /// policy answer that breaks tool-call pairing is a drive error (the model is not called).
     pub fn set_context_policy(&mut self, policy: impl ContextPolicy + 'static) {
         self.context = Some(Box::new(policy));
+        self.summary = None;
+    }
+
+    /// Replace the messages a cut leaves out with a model-written summary, instead of dropping them without trace.
+    ///
+    /// The cut is the same one [`KeepRecent`](crate::KeepRecent) makes (`head` kept, `tail` kept, never inside a tool call and
+    /// its result). The summary is a separate model call, made through this driver's [`Model`] with no tools, and is cached: it
+    /// is refreshed (the old summary plus the newly dropped messages) only when `every` or more messages have newly fallen out.
+    /// Between refreshes the not-yet-summarised messages are sent as they are. The run's own history is never shortened, and the
+    /// summary is not saved with it: a resumed drive writes it again, once. A failed summary call is a drive error, the request
+    /// is not sent without it. Replaces any [`ContextPolicy`] (and a policy replaces this).
+    pub fn set_summariser(&mut self, cfg: Summarise) {
+        self.summary = Some((cfg, SummaryState::default()));
+        self.context = None;
+    }
+
+    /// The summarising counterpart of [`Self::shape_context`]; emits `Compacted` and the summary call's `Usage`.
+    #[allow(clippy::type_complexity)]
+    async fn summarise_context(
+        &mut self,
+        history: Vec<Arc<Message>>,
+        prompt: Arc<Message>,
+        patch: Option<RequestPatch>,
+    ) -> Result<(Vec<Arc<Message>>, Arc<Message>, Option<RequestPatch>), DriverError> {
+        let (cfg, mut state) = match &self.summary {
+            Some((c, st)) => (*c, st.clone()),
+            None => return Ok((history, prompt, patch)),
+        };
+        let mut all = history;
+        all.push(prompt.clone());
+        let len = all.len();
+        let start = rig_core::conversation::pairing::safe_start(&all, len.saturating_sub(cfg.tail));
+        if len <= cfg.head + cfg.tail || start <= cfg.head {
+            all.pop();
+            return Ok((all, prompt, patch));
+        }
+        if state.text.is_none() || start.saturating_sub(state.covered) >= cfg.every.max(1) {
+            let from = state.covered.max(cfg.head);
+            let text = self
+                .summarise(state.text.as_deref(), &all[from..start])
+                .await?;
+            state = SummaryState {
+                covered: start,
+                text: Some(text),
+            };
+            self.summary = Some((cfg, state.clone()));
+        }
+        let text = state.text.unwrap_or_default();
+        let from = state.covered.max(cfg.head);
+        let mut shaped: Vec<Arc<Message>> = all[..cfg.head].to_vec();
+        shaped.push(Arc::new(Message::user(format!(
+            "Summary of the earlier turns of this conversation (they are no longer shown):\n{text}"
+        ))));
+        shaped.extend_from_slice(&all[from..]);
+        match shaped.last() {
+            Some(last) if Arc::ptr_eq(last, &prompt) || **last == *prompt => {}
+            _ => {
+                return Err(DriverError::Run(
+                    "summariser dropped the turn's prompt (it must stay last)".into(),
+                ));
+            }
+        }
+        rig_core::conversation::pairing::validate(&shaped).map_err(|e| rerr("summariser", &e))?;
+        let (dropped, kept) = (from - cfg.head, shaped.len());
+        shaped.pop();
+        let patch = Some(RequestPatch::new().history(shaped.clone()));
+        self.emit(Event::Compacted { dropped, kept });
+        Ok((shaped, prompt, patch))
+    }
+
+    /// One model call, no tools and no history, that turns `prior` (an earlier summary) and `msgs` into a new summary.
+    async fn summarise(
+        &mut self,
+        prior: Option<&str>,
+        msgs: &[Arc<Message>],
+    ) -> Result<String, DriverError> {
+        let excerpt = serde_json::to_string(msgs).map_err(|e| rerr("summariser", &e))?;
+        let mut ask = String::from(
+            "Summarise this conversation excerpt for your own later use. Keep the task, decisions, facts, names, results and \
+             anything unfinished; leave out the rest. Reply with the summary only.\n\n",
+        );
+        if let Some(p) = prior {
+            ask.push_str(&format!("Earlier summary:\n{p}\n\n"));
+        }
+        ask.push_str(&format!("Excerpt (JSON messages):\n{excerpt}"));
+        let stream = self
+            .model
+            .stream(CompletionRequest::new(Message::user(ask)))
+            .await
+            .map_err(|e| rerr("summary stream open", &e))?;
+        let response = stream
+            .finish()
+            .await
+            .map_err(|e| rerr("summary finish", &e))?;
+        self.emit(Event::Usage {
+            input: response.usage.input_tokens,
+            output: response.usage.output_tokens,
+        });
+        let text = response.text();
+        if text.trim().is_empty() {
+            return Err(DriverError::Run(
+                "summariser: the model returned no text".into(),
+            ));
+        }
+        Ok(text)
     }
 
     /// Apply the context policy, if any, to the transcript for this call (prompt last). Emits `Compacted` when it shortens it.
@@ -324,7 +438,11 @@ impl<M: Model, T: ToolHost, S: SessionStore> Driver<M, T, S> {
                         return Ok(End::Stopped);
                     }
                     let (history, prompt, patch) = splice_injected(run, history, prompt);
-                    let (history, prompt, patch) = self.shape_context(history, prompt, patch)?;
+                    let (history, prompt, patch) = if self.summary.is_some() {
+                        self.summarise_context(history, prompt, patch).await?
+                    } else {
+                        self.shape_context(history, prompt, patch)?
+                    };
                     self.emit(Event::ModelCall { turn: turn as u64 });
                     let caps = self.model.capabilities();
                     let prepared = prepare_request(
