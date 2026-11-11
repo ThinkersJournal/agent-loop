@@ -91,6 +91,16 @@ while its writer is still writing it, or after a crash tore it. So every stored 
 reader **ignores a value whose hash does not match** (a gap in `seq` is harmless). This is safe for the rules in §3: a record
 torn by a crash was never acknowledged, so an unacknowledged `intent` means `apply` did not run.
 
+**The guarantee (PM ruling, 2026-11-11: accept the gap now): detect, not survive.** The record store does not promise a record
+survives a power cut; it promises a damaged one is **noticed**. A resumed session reads the records, and:
+- a value whose hash does not match is a **torn record**: it is reported as torn, never trusted, and never read as "no write-back";
+- a gap in `seq` (a record in the middle is missing) is reported the same way;
+- **not detectable:** the *last* record lost whole (no later record shows the gap), and a record lost together with every record
+  after it. Those look like a session that stopped earlier. For `writeback.intent` that is the stale view of §1, and the base-hash
+  `Conflict` is still the backstop.
+`ResumeFacts` (§6) carries `torn` and `gaps`, so the host can tell the person. This is revisited when PersistAnt has a `Machine`
+durability blob backend (the PM is asking the PersistAnt lane to log that as a gap row).
+
 ## 5. A finding that goes beyond this task: `FileStore` and `FileInbox`
 
 The standing rule is that persistence goes through PersistAnt and a project does not keep a private backend. This crate already does:
@@ -118,7 +128,8 @@ reference, or remove once PersistAnt-backed ones exist), which is the PM's call.
 1. §5: migrate the store and inbox to PersistAnt too, and what happens to `FileStore`/`FileInbox`?
 2. Answered by the PersistAnt lane (see §4): `fs` is the one backend, `Process` durability only; depend on crates.io `persistant`
    0.16.16 (0.16.17 to 0.16.19 are not published, and the lane says none touch blob). Is "records can be lost to a power cut" acceptable
-   given the §3 recovery, or does it wait for a `Machine`-durable blob backend (a PersistAnt row)?
+   given the §3 recovery, or does it wait for a `Machine`-durable blob backend (a PersistAnt row)? **Ruled by the PM 2026-11-11: accept
+   it now, detect not survive (§4 guarantee); revisit when PersistAnt has that backend.**
 3. §3 point 3: is "mixed state is shown to the person, never retried" the right rule, or should a policy decide?
 4. The `workspace.opened` record under `bind`: there is no base manifest; should it record the ACL grant's identity instead (needs
    AntSpawn A2, not built)?
