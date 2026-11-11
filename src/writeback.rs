@@ -16,6 +16,7 @@ use rig_core::message::ToolName;
 
 use crate::changeset::{ApplyError, ChangeSet, Manifest, RealTree, WorkCopy, apply, diff};
 use crate::driver::{ToolHost, ToolOutcome};
+use crate::records::{Records, RecordsError, ResumeFacts, WorkspaceRecord};
 use crate::workspace::WorkspaceMode;
 
 /// The tool's name as the model sees it.
@@ -103,34 +104,154 @@ pub fn write_back(
     approver: &mut impl Approver,
     ledger: &mut impl Ledger,
 ) -> WriteBack {
+    run(
+        mode,
+        policy,
+        base,
+        work_manifest,
+        work,
+        real,
+        approver,
+        ledger,
+        None,
+    )
+    .outcome
+}
+
+/// A write-back call and what happened to its record (`docs/RUN-RECORD.md` 3).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Recorded {
+    pub outcome: WriteBack,
+    /// A record could not be written. When the intent could not, `outcome` is `Refused` and nothing was written. When the closing
+    /// `done` could not, `outcome` is still what really happened (an apply that succeeded is still `Applied`), and a resumed
+    /// session will see an unfinished intent.
+    pub record_error: Option<String>,
+}
+
+/// [`write_back`] with the run record kept: a `writeback.intent` is appended **before** `apply` touches the real tree, and a
+/// `writeback.done` after every outcome. **Fail closed:** if the intent cannot be recorded, the real tree is not touched.
+#[allow(clippy::too_many_arguments)]
+pub fn write_back_recorded(
+    records: &dyn Records,
+    session: &str,
+    mode: WorkspaceMode,
+    policy: WritePolicy,
+    base: &Manifest,
+    work_manifest: &Manifest,
+    work: &impl WorkCopy,
+    real: &mut impl RealTree,
+    approver: &mut impl Approver,
+    ledger: &mut impl Ledger,
+) -> Recorded {
+    run(
+        mode,
+        policy,
+        base,
+        work_manifest,
+        work,
+        real,
+        approver,
+        ledger,
+        Some((records, session)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(
+    mode: WorkspaceMode,
+    policy: WritePolicy,
+    base: &Manifest,
+    work_manifest: &Manifest,
+    work: &impl WorkCopy,
+    real: &mut impl RealTree,
+    approver: &mut impl Approver,
+    ledger: &mut impl Ledger,
+    rec: Option<(&dyn Records, &str)>,
+) -> Recorded {
     let line = |event: &str, set_hash: &str, path: Option<&str>, outcome: String| LedgerLine {
         event: event.into(),
         set_hash: set_hash.into(),
         path: path.map(str::to_string),
         outcome,
     };
+    // Appends one record; a failure is carried, never swallowed.
+    let record = |r: WorkspaceRecord| -> Option<String> {
+        let (records, session) = rec?;
+        records
+            .append_record(session, &r)
+            .err()
+            .map(|e| e.to_string())
+    };
+    let done = |set_hash: &str, outcome: String, approved: Vec<String>| WorkspaceRecord::Done {
+        set_hash: set_hash.into(),
+        outcome,
+        approved,
+    };
     if mode != WorkspaceMode::CopyBack {
         ledger.record(line("writeback.refused", "-", None, "not-copy-back".into()));
-        return WriteBack::Refused("write-back exists only in copy-back mode");
+        let record_error = record(done("-", "not-copy-back".into(), vec![]));
+        return Recorded {
+            outcome: WriteBack::Refused("write-back exists only in copy-back mode"),
+            record_error,
+        };
     }
     if policy == WritePolicy::Deny {
         ledger.record(line("writeback.refused", "-", None, "policy-deny".into()));
-        return WriteBack::Refused("policy denies write-back");
+        let record_error = record(done("-", "policy-deny".into(), vec![]));
+        return Recorded {
+            outcome: WriteBack::Refused("policy denies write-back"),
+            record_error,
+        };
     }
     let set = diff(base, work_manifest);
     let set_hash = set.hash();
     if set.is_empty() {
         ledger.record(line("writeback.set", &set_hash, None, "empty".into()));
-        return WriteBack::Empty;
+        let record_error = record(done(&set_hash, "empty".into(), vec![]));
+        return Recorded {
+            outcome: WriteBack::Empty,
+            record_error,
+        };
     }
     let approved = match approver.ask(&set, &set_hash) {
         Decision::Deny => {
             ledger.record(line("writeback.set", &set_hash, None, "denied".into()));
-            return WriteBack::Denied { set_hash };
+            let record_error = record(done(&set_hash, "denied".into(), vec![]));
+            return Recorded {
+                outcome: WriteBack::Denied { set_hash },
+                record_error,
+            };
         }
         // Approving a path that is not held changes nothing: only held paths consult this set.
         Decision::Approve { approved } => approved,
     };
+    // Fail closed: the intent is durable before the first byte of the real tree changes.
+    if rec.is_some() {
+        let intent = WorkspaceRecord::Intent {
+            set_hash: set_hash.clone(),
+            paths: set.changes.iter().map(|c| c.path.clone()).collect(),
+        };
+        if let Some(e) = record(intent) {
+            ledger.record(line(
+                "writeback.refused",
+                &set_hash,
+                None,
+                "record-failed".into(),
+            ));
+            return Recorded {
+                outcome: WriteBack::Refused(
+                    "the intent could not be recorded; nothing was written",
+                ),
+                record_error: Some(e),
+            };
+        }
+    }
+    let held_approved: Vec<String> = set
+        .needing_approval()
+        .iter()
+        .filter(|c| approved.contains(&c.path))
+        .map(|c| c.path.clone())
+        .collect();
     match apply(&set, &set_hash, &approved, work, real) {
         Ok(paths) => {
             for c in set.needing_approval() {
@@ -142,7 +263,11 @@ pub fn write_back(
                 ));
             }
             ledger.record(line("writeback.set", &set_hash, None, "applied".into()));
-            WriteBack::Applied { set_hash, paths }
+            let record_error = record(done(&set_hash, "applied".into(), held_approved));
+            Recorded {
+                outcome: WriteBack::Applied { set_hash, paths },
+                record_error,
+            }
         }
         Err(error) => {
             ledger.record(line(
@@ -151,9 +276,89 @@ pub fn write_back(
                 None,
                 format!("failed:{error}"),
             ));
-            WriteBack::Failed { set_hash, error }
+            let record_error = record(done(&set_hash, format!("failed:{error}"), vec![]));
+            Recorded {
+                outcome: WriteBack::Failed { set_hash, error },
+                record_error,
+            }
         }
     }
+}
+
+/// What a resumed session found when it checked an unfinished write-back against the real tree.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Recovery {
+    /// There was no unfinished intent.
+    NothingPending,
+    /// Every path in the set already holds its new content: recorded as `applied-recovered`.
+    Applied,
+    /// Every path still holds its base content: recorded as `failed:interrupted`. Safe to propose again.
+    NotApplied,
+    /// Some paths were written and some were not (or differ from both). **Nothing is recorded and nothing is retried**: the
+    /// person is told.
+    Partial {
+        written: Vec<String>,
+        untouched: Vec<String>,
+        other: Vec<String>,
+    },
+    /// The working copy no longer produces the change set the intent named, so the paths cannot be judged. Nothing is recorded.
+    Unjudgeable,
+}
+
+/// Settle an unfinished `writeback.intent` (`docs/RUN-RECORD.md` 3, point 3) by recomputing, per path, whether the real tree
+/// holds the change set's new content, its base content, or neither. Needs the base manifest and the working copy's manifest the
+/// intent was made from. Records the verdict only when it is certain (`Applied`, `NotApplied`).
+pub fn recover_unfinished(
+    records: &dyn Records,
+    session: &str,
+    facts: &ResumeFacts,
+    base: &Manifest,
+    work_manifest: &Manifest,
+    real: &impl RealTree,
+) -> Result<Recovery, RecordsError> {
+    let Some(WorkspaceRecord::Intent { set_hash, .. }) = &facts.unfinished else {
+        return Ok(Recovery::NothingPending);
+    };
+    let set = diff(base, work_manifest);
+    if set.hash() != *set_hash {
+        return Ok(Recovery::Unjudgeable);
+    }
+    let (mut written, mut untouched, mut other) = (vec![], vec![], vec![]);
+    for c in &set.changes {
+        let actual = real.hash_of(&c.path);
+        // A path whose base and new content are equal cannot be told apart; it counts as written (nothing to redo).
+        if actual == c.new {
+            written.push(c.path.clone());
+        } else if actual == c.base {
+            untouched.push(c.path.clone());
+        } else {
+            other.push(c.path.clone());
+        }
+    }
+    let verdict = if untouched.is_empty() && other.is_empty() {
+        Recovery::Applied
+    } else if written.is_empty() && other.is_empty() {
+        Recovery::NotApplied
+    } else {
+        return Ok(Recovery::Partial {
+            written,
+            untouched,
+            other,
+        });
+    };
+    let outcome = match verdict {
+        Recovery::Applied => "applied-recovered",
+        _ => "failed:interrupted",
+    };
+    records.append_record(
+        session,
+        &WorkspaceRecord::Done {
+            set_hash: set_hash.clone(),
+            outcome: outcome.into(),
+            approved: vec![],
+        },
+    )?;
+    Ok(verdict)
 }
 
 /// The tool as a [`ToolHost`]: offered only in `CopyBack` and not when the policy denies.

@@ -123,6 +123,10 @@ reference, or remove once PersistAnt-backed ones exist), which is the PM's call.
    them together is possible later and would be a 0.n bump.
 3. `ResumeFacts` fold and the host-side read. Optionally a watch-only `Event` per record; not needed for resume.
 
+**Built so far:** item 1 (#31) and item 2 (`write_back_recorded`, `recover_unfinished`, with `Recorded` and `Recovery`). Item 3's host-side
+reading is not built, and `WriteBackTool` does not call `write_back_recorded` yet (its fields are public, so adding a log there is a
+breaking change or a second tool type).
+
 ## 7. Open questions (for the PM, not decided)
 
 1. §5: migrate the store and inbox to PersistAnt too, and what happens to `FileStore`/`FileInbox`?
