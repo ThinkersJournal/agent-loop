@@ -20,6 +20,7 @@ mod file;
 mod hook;
 mod inbox;
 mod journal;
+mod pathpolicy;
 mod run;
 mod store;
 mod workspace;
@@ -37,6 +38,7 @@ pub use file::{FileInbox, FileStore};
 pub use hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
 pub use inbox::{Inbox, InboxError, MemoryInbox, Queued};
 pub use journal::Journal;
+pub use pathpolicy::{PathPolicy, PathPolicyError};
 pub use run::{Run, RunConfig};
 pub use store::{MemoryStore, SessionStore, StoreError};
 pub use workspace::{
