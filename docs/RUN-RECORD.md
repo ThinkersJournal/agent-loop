@@ -8,8 +8,9 @@ this note states the storage need so PersistAnt's lookup picks the backend.
 
 Read for this note: this repo at `origin/main` `7c23b2d` (0.1.2); PersistAnt at `origin/main` `23a5d34` (0.16.19), its `README.md`,
 `vocabulary.rs` (the capability ids and their contracts) and `provider.rs` (`ProviderNeeds`, `providers`). crates.io has `persistant`
-0.16.16 (`cargo search`). **I did not compile against PersistAnt or call `providers` for this note**, so which backends meet the need
-below is not known to me; that is what the lookup is for.
+0.16.16 (`cargo search`). **The need in section 4 was checked by the PersistAnt lane** (message `[FINDING] run-record-providers`,
+PersistAnt `main` `23a5d34`, `registry::providers` compiled and run, all backends): that result is reported there, as theirs, and
+it changed the first version of this note. I did not run it myself.
 
 ## 1. Why events are not enough
 
@@ -64,19 +65,40 @@ opens it by name. The records are keyed values, one key per record (`records/<se
 |---|---|
 | `blob.read`, `blob.write` | read a record, write a record or manifest |
 | `blob.list` | read a session's records in order (ascending bytewise, so zero-padded `seq` sorts) |
-| `blob.create_exclusive_atomic` | take the next `seq` safely when two writers race, and a reader never sees a half-written record. It does the job `hard_link` does in `FileInbox` today |
+| `blob.create_exclusive` | take the next `seq` safely when two writers race: of any number of concurrent creates of one key, exactly one succeeds. It does the job `hard_link` does in `FileInbox` today |
+| `blob.delete` | pruning old sessions (not needed for correctness) |
 | minimum durability: `Process` | a record must survive a crash of the process (the point of §1) |
 
-In order of importance: `Machine` durability (a record is the evidence that the real tree changed; power loss should not erase it),
-then `blob.delete` (pruning old sessions). Speed does not matter (a handful of records per session). Not needed: `blob.append`
-(one shared log has no atomic sequence number; per-record keys do), the `kv.*` family, relational.
+Speed does not matter (a handful of records per session). Not needed: `blob.append` (one shared log has no atomic sequence number;
+per-record keys do), the `kv.*` family, relational.
+
+**What the lookup returned** (PersistAnt lane, `main` `23a5d34`, run for real; relayed, not re-run here):
+- The ids are `blob.read blob.write blob.list blob.create_exclusive blob.delete`. **`blob.create_exclusive_atomic` does not exist as
+  a verified capability** on any backend, so the first version of this note, which asked for it, asked for something nobody offers.
+  It is dropped.
+- At `Process` durability the only backend is `fs`. `memory` is volatile; the SQL backends have no blob rows (blob is `fs` only).
+- **`Machine` durability is unmet**: `fs` is `Process`, nothing offers `Machine`. So power-loss survival of a record is **not
+  available** through PersistAnt today, and this note no longer asks for it. A record can be lost to a power cut after its
+  `intent` was acknowledged and the tree changed. Then a resumed session sees no write-back, which is the stale view §1
+  describes; the only backstop is the same one: re-proposing hits the base-hash `Conflict`, so nothing is overwritten. §3 point 3's
+  recovery cannot help, since it starts from an `intent` that is gone.
+- On `fs`, `create_exclusive` is exclusive only when the store is opened **without** `atomic_write_dir` (PersistAnt `store.rs:546`).
+  The record store is therefore opened without it. That costs `blob.replace_atomic`, which this design does not use (each record is
+  created once and never replaced).
+
+**Consequence for readers: a value may be visible before it is complete.** Without an atomic create, a reader can see a record
+while its writer is still writing it, or after a crash tore it. So every stored value is `<sha256 hex of body>\n<JSON body>`, and a
+reader **ignores a value whose hash does not match** (a gap in `seq` is harmless). This is safe for the rules in §3: a record
+torn by a crash was never acknowledged, so an unacknowledged `intent` means `apply` did not run.
 
 ## 5. A finding that goes beyond this task: `FileStore` and `FileInbox`
 
 The standing rule is that persistence goes through PersistAnt and a project does not keep a private backend. This crate already does:
 `FileStore` and `FileInbox` (`file.rs`, 0.0.24) are hand-written disk backends (temp file, `sync_all`, `hard_link`). The need in §4
-is the same one they meet (`create_exclusive_atomic` for the next sequence or id, `list`, `read`, durable), plus `blob.delete` for
-"keep the newest two snapshots". So one need set would serve all three seams, and `PersistStore`, `PersistInbox` and `PersistRecords`
+is the same one they meet (`create_exclusive` for the next sequence or id, `list`, `read`, `Process` durability), plus `blob.delete`
+for "keep the newest two snapshots". One difference to check before promising it: `FileStore` publishes a snapshot with `hard_link`,
+so a reader never sees a partial snapshot, and `fs` through PersistAnt does not give that (above); the same hash-checked value rule
+would have to cover snapshots, and a snapshot is large. So one need set would serve all three seams, and `PersistStore`, `PersistInbox` and `PersistRecords`
 could sit over one opened handle.
 
 I have not started this. It replaces shipped code and decides the future of `FileStore`/`FileInbox` (keep as the zero-dependency
@@ -94,8 +116,9 @@ reference, or remove once PersistAnt-backed ones exist), which is the PM's call.
 ## 7. Open questions (for the PM, not decided)
 
 1. §5: migrate the store and inbox to PersistAnt too, and what happens to `FileStore`/`FileInbox`?
-2. Does PersistAnt's lookup return at least one backend for the §4 need? (I have not called it.) Which crates.io `persistant` version
-   to depend on: 0.16.16 is the latest I saw published, `main` is 0.16.19.
+2. Answered by the PersistAnt lane (see §4): `fs` is the one backend, `Process` durability only; depend on crates.io `persistant`
+   0.16.16 (0.16.17 to 0.16.19 are not published, and the lane says none touch blob). Is "records can be lost to a power cut" acceptable
+   given the §3 recovery, or does it wait for a `Machine`-durable blob backend (a PersistAnt row)?
 3. §3 point 3: is "mixed state is shown to the person, never retried" the right rule, or should a policy decide?
 4. The `workspace.opened` record under `bind`: there is no base manifest; should it record the ACL grant's identity instead (needs
    AntSpawn A2, not built)?
