@@ -53,6 +53,7 @@ pub use workspace::{
     WorkspaceMode, open_workspace, policy_hash, requested_mode, select_mode,
 };
 pub use writeback::{
-    Approver, Decision, Ledger, LedgerLine, MemoryLedger, Recorded, Recovery, TOOL_NAME, WriteBack,
-    WriteBackTool, WritePolicy, recover_unfinished, write_back, write_back_recorded,
+    Approver, Decision, Ledger, LedgerLine, MemoryLedger, Recorded, Recovery, ResumeReport,
+    TOOL_NAME, WriteBack, WriteBackTool, WritePolicy, check_resume, recover_unfinished, write_back,
+    write_back_recorded,
 };
