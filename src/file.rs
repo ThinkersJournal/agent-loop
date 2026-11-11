@@ -32,7 +32,7 @@ static TMP: AtomicU64 = AtomicU64::new(0);
 /// Only lowercase ASCII letters, digits, `-` and `_` are kept; every other byte, **uppercase letters included**, becomes `%XX`,
 /// so two ids never share a name on a case-insensitive filesystem. The result starts with `s_`, so it is never a Windows device
 /// name (`con`, `nul`, `aux`, ...), which Windows reads as a device whatever the extension.
-fn encode(session: &str) -> Option<String> {
+pub(crate) fn encode(session: &str) -> Option<String> {
     if session.is_empty() {
         return None;
     }

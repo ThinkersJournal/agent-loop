@@ -21,6 +21,7 @@ mod hook;
 mod inbox;
 mod journal;
 mod pathpolicy;
+mod records;
 mod run;
 mod store;
 mod workspace;
@@ -39,6 +40,12 @@ pub use hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
 pub use inbox::{Inbox, InboxError, MemoryInbox, Queued};
 pub use journal::Journal;
 pub use pathpolicy::{PathPolicy, PathPolicyError};
+pub use records::{
+    KeyedBlobs, Listing, MemoryBlobs, MemoryRecords, RecordLog, Records, RecordsError, ResumeFacts,
+    Stored, WorkspaceRecord,
+};
+#[cfg(feature = "persistant")]
+pub use records::{PersistBlobs, records_needs};
 pub use run::{Run, RunConfig};
 pub use store::{MemoryStore, SessionStore, StoreError};
 pub use workspace::{
