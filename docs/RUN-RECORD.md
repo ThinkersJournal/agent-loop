@@ -1,0 +1,101 @@
+# A durable run record for workspace facts (seam F, design note)
+
+Status: **proposal, nothing built.** Task from the PM ("build it, design note first"): `docs/SANDBOX.md` 5.6 seam F says the base
+manifest and the change set are "session records (`Event`), so a resumed session knows whether write-back happened". The PM's
+direction: a durable record a resumed session reads, **stored through PersistAnt** (CireSnave: *"All of our projects should adopt
+PersistAnt for persistence"*, `CIRESNAVE-EXPECTATIONS.md` 1069, and the five-step contract at 1100), events stay watch-only, and
+this note states the storage need so PersistAnt's lookup picks the backend.
+
+Read for this note: this repo at `origin/main` `7c23b2d` (0.1.2); PersistAnt at `origin/main` `23a5d34` (0.16.19), its `README.md`,
+`vocabulary.rs` (the capability ids and their contracts) and `provider.rs` (`ProviderNeeds`, `providers`). crates.io has `persistant`
+0.16.16 (`cargo search`). **I did not compile against PersistAnt or call `providers` for this note**, so which backends meet the need
+below is not known to me; that is what the lookup is for.
+
+## 1. Why events are not enough
+
+`Event` is for watching (`events.rs`: "nothing in the run's saved state depends on a sink"). A resumed drive has no sink history, so
+an event cannot tell it "write-back happened". The fact has to be stored, and read at resume.
+
+It also cannot live in the run snapshot. The driver saves a snapshot **before** tools run (write-ahead) and again at the next
+boundary. A write-back is a tool call, so a record appended to the run afterwards reaches disk only at the next snapshot:
+
+| Crash point | Real tree | Run snapshot | A resumed session believes |
+|---|---|---|---|
+| after apply, before the next snapshot | changed | no record | "not written back" (wrong) |
+
+Repeating the proposal is caught by the base-hash check (`Conflict`), so nothing is overwritten, but the person is shown a stale
+proposal, and a held path they already approved is asked again. The record has to be durable **around the side effect**, not at the
+next boundary, so it is its own log, written by the write-back path itself. (The snapshot is also the engine's format, `RUN_FORMAT`
+and `deny_unknown_fields`; a host record in it is engine-specific, which is the README's existing caveat for saved sessions.)
+
+## 2. What is recorded
+
+One append-only list per session, JSON, each record `{ "v": 1, "seq": N, "kind": ..., ... }`:
+
+| `kind` | Fields | Written |
+|---|---|---|
+| `workspace.opened` | `mode` (`copy-back`/`bind`), `root`, `policy_hash`, `base` (hash of the base manifest, or none under `bind`) | when the sandbox opens |
+| `writeback.intent` | `set_hash`, `paths` | **before** `apply` touches the real tree |
+| `writeback.done` | `set_hash`, `outcome`, `approved` (held paths the person approved) | after `apply`, denial, refusal or failure |
+
+`outcome` is the existing `LedgerLine` vocabulary: `applied`, `denied`, `empty`, `failed:<why>`, `policy-deny`, `not-copy-back`.
+The base manifest itself can be large, so it is stored once as a content-addressed value `manifest/<hash>` and the record carries
+the hash. A record is a superset of a `Ledger` line: the ledger is the audit trail for people, the record is what resume reads.
+
+## 3. Write order and failure rules (fail closed)
+
+1. `intent` is appended and acknowledged **before** `apply`. If that append fails, `apply` does not run and the call fails.
+2. `done` is appended after. If it fails after a successful apply, the call still reports `Applied` (the tree did change) and also
+   carries the record error; it is never reported as a clean success, and never turned into "not applied".
+3. `apply` is not atomic across files, so a crash can leave a **partial** write-back. On resume, an `intent` with no `done` is
+   *unknown*: the host recomputes, per path, whether the real file equals the change set's new content, the base, or neither.
+   All new: record `done{applied, recovered}`. All base: record `done{failed:interrupted}`. Mixed or neither: tell the person, do
+   not retry on their behalf.
+4. A resumed session reads the list and folds it into `ResumeFacts { mode, base, writebacks, unfinished }`. The driver does not
+   need it; the host's workspace layer reads it, then tells the model (the mode is already part of the system context, 5.6).
+
+## 4. The storage need, for PersistAnt
+
+Per PersistAnt's contract (`CIRESNAVE-EXPECTATIONS.md` 1100): agent-loop is a library, so it **names no backend and keeps no
+candidate list**. It exposes the need; the host's setup UI passes it to PersistAnt, the operator picks, the host stores the id and
+opens it by name. The records are keyed values, one key per record (`records/<session>/<seq, zero-padded>`), plus `manifest/<hash>`:
+
+| Need (capability id) | Why |
+|---|---|
+| `blob.read`, `blob.write` | read a record, write a record or manifest |
+| `blob.list` | read a session's records in order (ascending bytewise, so zero-padded `seq` sorts) |
+| `blob.create_exclusive_atomic` | take the next `seq` safely when two writers race, and a reader never sees a half-written record. It does the job `hard_link` does in `FileInbox` today |
+| minimum durability: `Process` | a record must survive a crash of the process (the point of §1) |
+
+In order of importance: `Machine` durability (a record is the evidence that the real tree changed; power loss should not erase it),
+then `blob.delete` (pruning old sessions). Speed does not matter (a handful of records per session). Not needed: `blob.append`
+(one shared log has no atomic sequence number; per-record keys do), the `kv.*` family, relational.
+
+## 5. A finding that goes beyond this task: `FileStore` and `FileInbox`
+
+The standing rule is that persistence goes through PersistAnt and a project does not keep a private backend. This crate already does:
+`FileStore` and `FileInbox` (`file.rs`, 0.0.24) are hand-written disk backends (temp file, `sync_all`, `hard_link`). The need in §4
+is the same one they meet (`create_exclusive_atomic` for the next sequence or id, `list`, `read`, durable), plus `blob.delete` for
+"keep the newest two snapshots". So one need set would serve all three seams, and `PersistStore`, `PersistInbox` and `PersistRecords`
+could sit over one opened handle.
+
+I have not started this. It replaces shipped code and decides the future of `FileStore`/`FileInbox` (keep as the zero-dependency
+reference, or remove once PersistAnt-backed ones exist), which is the PM's call. `MemoryStore`/`MemoryInbox` are test fakes and stay.
+
+## 6. What would be built (each its own PR, none started)
+
+1. `Records` trait (`append` returns the `seq`, `list`) with `MemoryRecords` and a `PersistRecords` adapter over PersistAnt's
+   backend-agnostic handle, plus `records_needs()` returning the §4 need for the host to pass on. Non-breaking.
+2. `write_back_recorded`: intent before apply, done after, §3 rules, and the unknown-state recovery. The existing `write_back` and
+   `WriteBackTool` stay as they are (their `Ledger::record` cannot fail, so it cannot stop an apply); a breaking change that folds
+   them together is possible later and would be a 0.n bump.
+3. `ResumeFacts` fold and the host-side read. Optionally a watch-only `Event` per record; not needed for resume.
+
+## 7. Open questions (for the PM, not decided)
+
+1. §5: migrate the store and inbox to PersistAnt too, and what happens to `FileStore`/`FileInbox`?
+2. Does PersistAnt's lookup return at least one backend for the §4 need? (I have not called it.) Which crates.io `persistant` version
+   to depend on: 0.16.16 is the latest I saw published, `main` is 0.16.19.
+3. §3 point 3: is "mixed state is shown to the person, never retried" the right rule, or should a policy decide?
+4. The `workspace.opened` record under `bind`: there is no base manifest; should it record the ACL grant's identity instead (needs
+   AntSpawn A2, not built)?
