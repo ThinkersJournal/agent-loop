@@ -11,6 +11,7 @@
 //! still name rig-core types (`docs/WRAP.md`, stages 2 and 3, waiting for a consumer). A saved session is the engine's: a different
 //! engine cannot resume it.
 
+mod blobstore;
 mod changeset;
 mod context;
 mod control;
@@ -27,6 +28,7 @@ mod store;
 mod workspace;
 mod writeback;
 
+pub use blobstore::BlobStore;
 pub use changeset::{
     ApplyError, Change, ChangeSet, Conflict, FileStamp, Kind, Manifest, RealTree, Reason, WorkCopy,
     apply, diff, hash_bytes,

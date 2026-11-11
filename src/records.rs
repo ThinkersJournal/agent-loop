@@ -44,7 +44,8 @@ impl std::fmt::Display for RecordsError {
 }
 impl std::error::Error for RecordsError {}
 
-/// The small storage a record log needs: create a key only if absent, list keys under a prefix, read a key.
+/// The small storage the record log and the session store need: create a key only if absent, list keys under a prefix, read a key,
+/// and (optionally) delete one.
 pub trait KeyedBlobs: Send + Sync {
     /// Store `bytes` at `key` only if nothing is there. `Ok(false)` means the key already existed and nothing changed.
     fn create_if_absent(&self, key: &str, bytes: Vec<u8>) -> Result<bool, RecordsError>;
@@ -52,6 +53,11 @@ pub trait KeyedBlobs: Send + Sync {
     fn list(&self, prefix: &str) -> Result<Vec<String>, RecordsError>;
     /// The value at `key`, or `None` if absent.
     fn read(&self, key: &str) -> Result<Option<Vec<u8>>, RecordsError>;
+    /// Delete `key`; deleting an absent key is not an error. Defaulted so a backend written before this method existed still
+    /// compiles: it answers "cannot delete", and the callers that need it (`BlobStore::clear_torn`) fail instead of pretending.
+    fn delete(&self, _key: &str) -> Result<(), RecordsError> {
+        Err(RecordsError::Backend("this backend cannot delete".into()))
+    }
 }
 
 /// In-memory [`KeyedBlobs`]. Clones share one map, so a test can drop a log and open another over the same blobs.
@@ -82,6 +88,10 @@ impl KeyedBlobs for MemoryBlobs {
     }
     fn read(&self, key: &str) -> Result<Option<Vec<u8>>, RecordsError> {
         Ok(self.0.lock().expect("lock").get(key).cloned())
+    }
+    fn delete(&self, key: &str) -> Result<(), RecordsError> {
+        self.0.lock().expect("lock").remove(key);
+        Ok(())
     }
 }
 
@@ -224,12 +234,12 @@ fn digest(body: &str) -> String {
         .collect()
 }
 
-fn seal(body: &str) -> Vec<u8> {
+pub(crate) fn seal(body: &str) -> Vec<u8> {
     format!("{}\n{body}", digest(body)).into_bytes()
 }
 
 /// The body of a stored value, or `None` if the hash line is missing or does not match.
-fn open_value(bytes: &[u8]) -> Option<String> {
+pub(crate) fn open_value(bytes: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(bytes).ok()?;
     let (hash, body) = text.split_once('\n')?;
     (hash == digest(body)).then(|| body.to_string())
@@ -379,6 +389,10 @@ mod persist {
                 Err(Error::NotFound(_)) => Ok(None),
                 Err(e) => Err(backend(e)),
             }
+        }
+
+        fn delete(&self, key: &str) -> Result<(), RecordsError> {
+            self.0.delete(key).map_err(backend)
         }
     }
 }

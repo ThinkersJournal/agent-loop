@@ -17,5 +17,9 @@ them would cost and why that waits for a consumer.
 record is stored through PersistAnt with a hash, so a record damaged by a crash or power cut is reported as torn, never trusted, but
 a record is not promised to survive a power cut (no PersistAnt blob backend offers that yet). A lost final record cannot be detected.
 
+**Sessions through PersistAnt:** `BlobStore` is a `SessionStore` over any `KeyedBlobs` (PersistAnt `fs` with the `persistant` feature),
+hash-checked, with a fail-closed rule for a damaged snapshot. It has `Process` durability at best; `FileStore` stays for the
+power-loss-careful case (`docs/PERSIST-MIGRATION.md`).
+
 Licensed under either of the Apache License, Version 2.0 (`LICENSE-APACHE`) or the MIT licence (`LICENSE-MIT`), at your
 option.

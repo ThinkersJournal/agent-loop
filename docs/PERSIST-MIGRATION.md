@@ -85,6 +85,10 @@ a new id, which the idempotency `Journal` cannot recognise**. With `Process` dur
 2. `BlobInbox` with `prune` and `torn`, same tests, and the existing `FileInbox` tests ported as a shared suite run against both.
 3. README and doc updates: which backend to use when, and the gap row. No code removed.
 
+**Built so far:** slice 1 (`KeyedBlobs::delete`, defaulted, and `BlobStore`) on the recommendations above: a damaged claim fails
+closed and `clear_torn` is explicit. Those two points are still unruled; if the PM chooses differently the change is in `save`.
+Slices 2 and 3 are not started, and nothing was removed.
+
 ## 6. Open questions (for the PM, not decided)
 
 1. Is the section 3 durability risk for snapshots acceptable with `Process` durability, or does the default host keep `FileStore`
