@@ -160,6 +160,62 @@ fn a_backend_that_cannot_delete_still_saves_and_clear_torn_says_it_cannot() {
     );
 }
 
+#[test]
+fn the_journal_is_kept_per_sequence_the_newest_two_survive_and_a_damaged_one_is_skipped() {
+    let blobs = MemoryBlobs::new();
+    let mut s = BlobStore::new(blobs.clone());
+    assert_eq!(s.load_journal("s").unwrap(), None);
+    for i in 0..4u64 {
+        let seq = s.save("s", i, "snap").unwrap();
+        s.save_journal("s", seq, &format!("{{\"v\":{seq}}}"))
+            .unwrap();
+    }
+    assert_eq!(s.load_journal("s").unwrap(), Some((4, "{\"v\":4}".into())));
+    assert_eq!(
+        blobs.list("journal/s_s/").unwrap().len(),
+        2,
+        "newest two kept"
+    );
+    // A retry of the same text is fine; different text for a taken sequence is refused and nothing is overwritten.
+    s.save_journal("s", 4, "{\"v\":4}").unwrap();
+    assert!(matches!(
+        s.save_journal("s", 4, "other"),
+        Err(StoreError::Backend(m)) if m.contains("different content")
+    ));
+    assert_eq!(s.load_journal("s").unwrap(), Some((4, "{\"v\":4}".into())));
+    // A crash that left a damaged newest blob: load falls back, a save over it fails closed, clear_torn removes it.
+    assert!(
+        blobs
+            .create_if_absent("journal/s_s/00000000000000000005", b"half".to_vec())
+            .unwrap()
+    );
+    assert_eq!(s.load_journal("s").unwrap(), Some((4, "{\"v\":4}".into())));
+    assert!(matches!(
+        s.save_journal("s", 5, "{}"),
+        Err(StoreError::Backend(m)) if m.contains("damaged journal")
+    ));
+    assert_eq!(s.clear_torn("s").unwrap(), 1);
+    s.save_journal("s", 5, "{}").unwrap();
+    assert_eq!(s.load_journal("s").unwrap(), Some((5, "{}".into())));
+    assert_eq!(
+        s.load_journal("other").unwrap(),
+        None,
+        "sessions are separate"
+    );
+}
+
+#[test]
+fn a_real_journal_round_trips_through_the_store() {
+    use agent_loop::Journal;
+    let j = Journal::new(NoTools);
+    let mut s = BlobStore::new(MemoryBlobs::new());
+    let seq = s.save("s", 0, "snap").unwrap();
+    s.save_journal("s", seq, &j.to_json()).unwrap();
+    let (jseq, text) = s.load_journal("s").unwrap().unwrap();
+    assert_eq!(jseq, seq);
+    assert!(Journal::from_json(&text, NoTools).is_ok());
+}
+
 #[cfg(feature = "persistant")]
 mod persist {
     use super::*;
