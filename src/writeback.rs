@@ -431,6 +431,43 @@ pub fn check_resume(
     })
 }
 
+/// The one tool's definition, or none when it must not be offered.
+fn tool_definitions(mode: WorkspaceMode, policy: WritePolicy) -> Vec<Arc<ToolDefinition>> {
+    if mode != WorkspaceMode::CopyBack || policy == WritePolicy::Deny {
+        return vec![];
+    }
+    vec![Arc::new(ToolDefinition::new(
+        ToolName::new(TOOL_NAME).expect("non-empty"),
+        "Ask a person to write your staged edits to the real project. Until then edits are only proposed.",
+        serde_json::json!({"type":"object","properties":{}}),
+    ))]
+}
+
+/// What the model is told about a write-back, and the new base after one: `(is_error, text)`.
+fn tool_outcome(base: &mut Manifest, work: &impl WorkCopy, out: &WriteBack) -> (bool, String) {
+    match out {
+        WriteBack::Empty => (false, "nothing to write back".into()),
+        WriteBack::Refused(why) => (true, (*why).into()),
+        WriteBack::Denied { .. } => (true, "the person declined the write-back".into()),
+        WriteBack::Applied { paths, .. } => {
+            // The real tree now matches the work copy for these paths: the next write-back diffs from here.
+            for p in paths {
+                match work.read(p) {
+                    Some(b) => {
+                        base.0
+                            .insert(p.clone(), crate::changeset::FileStamp::of(&b));
+                    }
+                    None => {
+                        base.0.remove(p);
+                    }
+                }
+            }
+            (false, format!("written: {}", paths.join(", ")))
+        }
+        WriteBack::Failed { error, .. } => (true, error.to_string()),
+    }
+}
+
 /// The tool as a [`ToolHost`]: offered only in `CopyBack` and not when the policy denies.
 pub struct WriteBackTool<W, R, A, L> {
     pub mode: WorkspaceMode,
@@ -446,14 +483,7 @@ pub struct WriteBackTool<W, R, A, L> {
 
 impl<W: WorkCopy, R: RealTree, A: Approver, L: Ledger> ToolHost for WriteBackTool<W, R, A, L> {
     fn definitions(&self) -> Vec<Arc<ToolDefinition>> {
-        if self.mode != WorkspaceMode::CopyBack || self.policy == WritePolicy::Deny {
-            return vec![];
-        }
-        vec![Arc::new(ToolDefinition::new(
-            ToolName::new(TOOL_NAME).expect("non-empty"),
-            "Ask a person to write your staged edits to the real project. Until then edits are only proposed.",
-            serde_json::json!({"type":"object","properties":{}}),
-        ))]
+        tool_definitions(self.mode, self.policy)
     }
 
     async fn call(&mut self, _id: &str, name: &str, _args: &serde_json::Value) -> ToolOutcome {
@@ -461,7 +491,7 @@ impl<W: WorkCopy, R: RealTree, A: Approver, L: Ledger> ToolHost for WriteBackToo
             return ToolOutcome::error(format!("unknown tool {name}"));
         }
         let manifest = (self.manifest_of)(&self.work);
-        match write_back(
+        let out = write_back(
             self.mode,
             self.policy,
             &self.base,
@@ -470,27 +500,69 @@ impl<W: WorkCopy, R: RealTree, A: Approver, L: Ledger> ToolHost for WriteBackToo
             &mut self.real,
             &mut self.approver,
             &mut self.ledger,
-        ) {
-            WriteBack::Empty => ToolOutcome::ok("nothing to write back"),
-            WriteBack::Refused(why) => ToolOutcome::error(why),
-            WriteBack::Denied { .. } => ToolOutcome::error("the person declined the write-back"),
-            WriteBack::Applied { paths, .. } => {
-                // The real tree now matches the work copy for these paths: the next write-back diffs from here.
-                for p in &paths {
-                    match self.work.read(p) {
-                        Some(b) => {
-                            self.base
-                                .0
-                                .insert(p.clone(), crate::changeset::FileStamp::of(&b));
-                        }
-                        None => {
-                            self.base.0.remove(p);
-                        }
-                    }
-                }
-                ToolOutcome::ok(format!("written: {}", paths.join(", ")))
-            }
-            WriteBack::Failed { error, .. } => ToolOutcome::error(error.to_string()),
+        );
+        let (is_error, text) = tool_outcome(&mut self.base, &self.work, &out);
+        if is_error {
+            ToolOutcome::error(text)
+        } else {
+            ToolOutcome::ok(text)
+        }
+    }
+}
+
+/// [`WriteBackTool`] that keeps the run record (`docs/RUN-RECORD.md`): it calls [`write_back_recorded`], so the intent is durable
+/// before the real tree changes and every outcome is recorded. A separate type, so `WriteBackTool`'s public fields stay as they
+/// were. If the intent cannot be recorded the write does not happen and the model is told why; if only the closing record fails,
+/// the result is what really happened plus a warning the person should hear, and a resumed session will see an unfinished intent.
+pub struct RecordedWriteBackTool<W, R, A, L> {
+    pub mode: WorkspaceMode,
+    pub policy: WritePolicy,
+    pub base: Manifest,
+    pub work: W,
+    pub real: R,
+    pub approver: A,
+    pub ledger: L,
+    /// Reads the working copy's current manifest.
+    pub manifest_of: fn(&W) -> Manifest,
+    pub records: Arc<dyn Records>,
+    /// The session the records belong to.
+    pub session: String,
+}
+
+impl<W: WorkCopy, R: RealTree, A: Approver, L: Ledger> ToolHost
+    for RecordedWriteBackTool<W, R, A, L>
+{
+    fn definitions(&self) -> Vec<Arc<ToolDefinition>> {
+        tool_definitions(self.mode, self.policy)
+    }
+
+    async fn call(&mut self, _id: &str, name: &str, _args: &serde_json::Value) -> ToolOutcome {
+        if name != TOOL_NAME {
+            return ToolOutcome::error(format!("unknown tool {name}"));
+        }
+        let manifest = (self.manifest_of)(&self.work);
+        let rec = write_back_recorded(
+            &*self.records,
+            &self.session,
+            self.mode,
+            self.policy,
+            &self.base,
+            &manifest,
+            &self.work,
+            &mut self.real,
+            &mut self.approver,
+            &mut self.ledger,
+        );
+        let (is_error, mut text) = tool_outcome(&mut self.base, &self.work, &rec.outcome);
+        if let Some(e) = &rec.record_error {
+            text.push_str(&format!(
+                "\nWARNING: the run record could not be written ({e}); tell the person"
+            ));
+        }
+        if is_error {
+            ToolOutcome::error(text)
+        } else {
+            ToolOutcome::ok(text)
         }
     }
 }

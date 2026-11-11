@@ -13,7 +13,7 @@ sessions only. The traits `Model`, `ToolHost` and `ContextPolicy` still name rig
 them would cost and why that waits for a consumer.
 
 **Workspace records** (`docs/RUN-RECORD.md`): the log and its resume fold exist (`RecordLog`, `ResumeFacts`; PersistAnt storage behind the
-`persistant` feature), and `write_back_recorded` / `recover_unfinished` write and settle them, `check_resume` reads them at resume, but `WriteBackTool` does not use them yet. The guarantee is *detect, not survive*: a
+`persistant` feature), and `write_back_recorded` / `recover_unfinished` write and settle them, `check_resume` reads them at resume, and `RecordedWriteBackTool` is the write-back tool that keeps them (`WriteBackTool` does not). The guarantee is *detect, not survive*: a
 record is stored through PersistAnt with a hash, so a record damaged by a crash or power cut is reported as torn, never trusted, but
 a record is not promised to survive a power cut (no PersistAnt blob backend offers that yet). A lost final record cannot be detected.
 

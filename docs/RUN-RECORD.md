@@ -124,8 +124,8 @@ reference, or remove once PersistAnt-backed ones exist), which is the PM's call.
 3. `ResumeFacts` fold and the host-side read. Optionally a watch-only `Event` per record; not needed for resume.
 
 **Built so far:** item 1 (#31) and item 2 (`write_back_recorded`, `recover_unfinished`, with `Recorded` and `Recovery`). Item 3's host-side
-reading is `check_resume` (facts, recovery, and notes in words); the host still has to call it at resume and show the notes. And `WriteBackTool` does not call `write_back_recorded` yet (its fields are public, so adding a log there is a
-breaking change or a second tool type).
+reading is `check_resume` (facts, recovery, and notes in words); the host still has to call it at resume and show the notes. `RecordedWriteBackTool` is the tool that calls `write_back_recorded`: a
+second type, so `WriteBackTool`'s public fields did not change.
 
 ## 7. Open questions (for the PM, not decided)
 
