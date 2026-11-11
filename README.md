@@ -19,7 +19,7 @@ a record is not promised to survive a power cut (no PersistAnt blob backend offe
 
 **Sessions and inbox through PersistAnt:** `BlobStore` (a `SessionStore`) and `BlobInbox` (an `Inbox`) work over any `KeyedBlobs`
 (PersistAnt `fs` with the `persistant` feature). Values are hash-checked; a damaged snapshot fails closed until `BlobStore::clear_torn`,
-and a damaged inbox message is skipped and listed by `BlobInbox::torn`. Durability is the backend's: `Process` at best, so a power cut
+and a damaged inbox message is skipped and listed by `BlobInbox::torn`. `BlobStore::save_journal`/`load_journal` keep the idempotency `Journal`'s JSON beside the snapshot, one hash-checked blob per sequence number. Durability is the backend's: `Process` at best, so a power cut
 can lose the newest value. **Which to use:** `BlobStore`/`BlobInbox` by default; `FileStore`/`FileInbox` when a power cut must not lose
 the newest value (they flush with `sync_all` first; not power-cut tested). They stay until PersistAnt has a `Machine` blob backend
 (`docs/PERSIST-MIGRATION.md` 7 and 8).

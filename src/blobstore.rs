@@ -92,7 +92,7 @@ impl<B: KeyedBlobs> BlobStore<B> {
         ))
     }
 
-    /// Delete every snapshot above the newest verified one (damaged values a crash left behind). Returns how many.
+    /// Delete every snapshot above the newest verified one, and every damaged journal blob (values a crash left behind). Returns how many.
     ///
     /// **Call it only when no other writer exists**: a damaged-looking value can be a live writer's snapshot still being written,
     /// and deleting it would defeat the rule that a second writer is refused. The backend must support delete.
@@ -111,7 +111,92 @@ impl<B: KeyedBlobs> BlobStore<B> {
                 .map_err(backend)?;
             n += 1;
         }
+        // Damaged journal blobs too (same rule: only when no other writer exists).
+        let jp = Self::journal_prefix(session)?;
+        for seq in self.journal_seqs(&jp)? {
+            let key = Self::key(&jp, seq);
+            let intact = self
+                .blobs
+                .read(&key)
+                .map_err(backend)?
+                .is_some_and(|b| open_value(&b).is_some());
+            if !intact {
+                self.blobs.delete(&key).map_err(backend)?;
+                n += 1;
+            }
+        }
         Ok(n)
+    }
+
+    fn journal_prefix(session: &str) -> Result<String, StoreError> {
+        let name = encode(session).ok_or_else(|| StoreError::Backend("empty session id".into()))?;
+        Ok(format!("journal/{name}/"))
+    }
+
+    /// Keep the idempotency [`Journal`](crate::Journal)'s JSON (`Journal::to_json`) for the snapshot `seq` that `save` just returned:
+    /// one hash-checked blob per sequence number, `journal/<session>/<seq>`, created only if absent. Storing the same text again is
+    /// fine (a retry); different text for a taken `seq`, or a damaged blob in the way, is an error and nothing is overwritten.
+    /// The newest two are kept. Call it after `save`; on resume call [`load_journal`](Self::load_journal) beside `load`.
+    pub fn save_journal(&self, session: &str, seq: u64, json: &str) -> Result<(), StoreError> {
+        let prefix = Self::journal_prefix(session)?;
+        let key = Self::key(&prefix, seq);
+        if !self
+            .blobs
+            .create_if_absent(&key, seal(json))
+            .map_err(backend)?
+        {
+            let same = self
+                .blobs
+                .read(&key)
+                .map_err(backend)?
+                .and_then(|b| open_value(&b));
+            return match same {
+                Some(t) if t == json => Ok(()),
+                Some(_) => Err(StoreError::Backend(format!(
+                    "journal for sequence {seq} is already stored with different content"
+                ))),
+                None => Err(StoreError::Backend(format!(
+                    "damaged journal at sequence {seq}; if no other writer is running, call clear_torn"
+                ))),
+            };
+        }
+        // Keep the newest two. A failed delete only leaves an old blob behind.
+        let mut seqs = self.journal_seqs(&prefix)?;
+        seqs.retain(|s| *s != seq);
+        seqs.sort_unstable();
+        for old in seqs.into_iter().filter(|s| *s + 1 < seq) {
+            let _ = self.blobs.delete(&Self::key(&prefix, old));
+        }
+        Ok(())
+    }
+
+    /// The newest verified journal JSON and the snapshot sequence it belongs to, or `None` if there is none. A damaged newer blob is
+    /// skipped. **Compare the sequence with `load`'s**: a journal older than the snapshot missed the calls made since.
+    pub fn load_journal(&self, session: &str) -> Result<Option<(u64, String)>, StoreError> {
+        let prefix = Self::journal_prefix(session)?;
+        let mut seqs = self.journal_seqs(&prefix)?;
+        seqs.sort_unstable();
+        for seq in seqs.into_iter().rev() {
+            if let Some(text) = self
+                .blobs
+                .read(&Self::key(&prefix, seq))
+                .map_err(backend)?
+                .and_then(|b| open_value(&b))
+            {
+                return Ok(Some((seq, text)));
+            }
+        }
+        Ok(None)
+    }
+
+    fn journal_seqs(&self, prefix: &str) -> Result<Vec<u64>, StoreError> {
+        Ok(self
+            .blobs
+            .list(prefix)
+            .map_err(backend)?
+            .iter()
+            .filter_map(|k| k.strip_prefix(prefix)?.parse().ok())
+            .collect())
     }
 
     /// Sequence numbers of snapshots that failed their hash check, so a host can report them.
