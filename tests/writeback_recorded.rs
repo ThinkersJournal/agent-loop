@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use agent_loop::{
     Approver, ChangeSet, Decision, Manifest, MemoryBlobs, MemoryLedger, MemoryRecords, RealTree,
     Records, RecordsError, Recovery, WorkCopy, WorkspaceMode, WorkspaceRecord, WriteBack,
-    WritePolicy, diff, recover_unfinished, write_back_recorded,
+    WritePolicy, check_resume, diff, recover_unfinished, write_back_recorded,
 };
 
 const M: WorkspaceMode = WorkspaceMode::CopyBack;
@@ -380,5 +380,85 @@ fn recovery_judges_each_path_and_records_only_what_it_is_sure_of() {
     assert_eq!(
         settle(&r, &base, &work.manifest()),
         Recovery::NothingPending
+    );
+}
+
+#[test]
+fn check_resume_says_what_it_found_in_words_and_settles_only_what_is_certain() {
+    let base = Tree::of(&[("a.rs", "1"), ("b.rs", "1")]);
+    let work = Tree::of(&[("a.rs", "2"), ("b.rs", "2")]);
+    let set_hash = diff(&base.manifest(), &work.manifest()).hash();
+    let with_intent = || {
+        let r = MemoryRecords::new(MemoryBlobs::new());
+        r.append_record(
+            "s",
+            &WorkspaceRecord::Intent {
+                set_hash: set_hash.clone(),
+                paths: vec!["a.rs".into(), "b.rs".into()],
+            },
+        )
+        .unwrap();
+        r
+    };
+
+    // A clean, finished session says nothing.
+    let r = MemoryRecords::new(MemoryBlobs::new());
+    let rep = check_resume(&r, "s", &base.manifest(), &work.manifest(), &base).unwrap();
+    assert_eq!(rep.recovery, Recovery::NothingPending);
+    assert!(rep.notes.is_empty() && rep.facts.is_intact());
+
+    // Applied: recorded, so the facts come back with nothing unfinished.
+    let r = with_intent();
+    let rep = check_resume(&r, "s", &base.manifest(), &work.manifest(), &work).unwrap();
+    assert_eq!(rep.recovery, Recovery::Applied);
+    assert_eq!(
+        rep.facts.unfinished, None,
+        "facts are read after the verdict"
+    );
+    assert!(rep.notes[0].contains("already applied"), "{:?}", rep.notes);
+
+    // Not applied: safe to propose again.
+    let r = with_intent();
+    let rep = check_resume(&r, "s", &base.manifest(), &work.manifest(), &base).unwrap();
+    assert_eq!(rep.recovery, Recovery::NotApplied);
+    assert!(rep.notes[0].contains("safe to propose again"));
+
+    // Partial: said loudly, not retried, still unfinished.
+    let r = with_intent();
+    let part = Tree::of(&[("a.rs", "2"), ("b.rs", "1")]);
+    let rep = check_resume(&r, "s", &base.manifest(), &work.manifest(), &part).unwrap();
+    assert!(matches!(rep.recovery, Recovery::Partial { .. }));
+    assert!(
+        rep.notes[0].contains("PARTLY applied") && rep.notes[0].contains("a person must decide")
+    );
+    assert!(rep.facts.unfinished.is_some());
+
+    // Unjudgeable: the work copy changed.
+    let r = with_intent();
+    let other = Tree::of(&[("a.rs", "9"), ("b.rs", "2")]);
+    let rep = check_resume(&r, "s", &base.manifest(), &other.manifest(), &work).unwrap();
+    assert_eq!(rep.recovery, Recovery::Unjudgeable);
+    assert!(rep.notes[0].contains("could not be checked"));
+}
+
+#[test]
+fn check_resume_reports_damaged_missing_and_unreadable_records() {
+    let base = Tree::of(&[("a.rs", "1")]);
+    let blobs = MemoryBlobs::new();
+    let r = MemoryRecords::new(blobs.clone());
+    use agent_loop::KeyedBlobs;
+    let key = |n: u64| format!("records/s_s/{n:020}");
+    r.append("s", "{\"v\":2,\"kind\":\"workspace.opened\"}")
+        .unwrap(); // 1: unreadable
+    assert!(blobs.create_if_absent(&key(2), b"junk".to_vec()).unwrap()); // 2: torn
+    r.append("s", "{\"v\":1,\"kind\":\"x\"}").unwrap(); // 3: readable, an unknown kind
+    // 4 is missing; 5 is torn too, so the gap is real.
+    assert!(blobs.create_if_absent(&key(5), b"junk".to_vec()).unwrap());
+    let rep = check_resume(&r, "s", &base.manifest(), &base.manifest(), &base).unwrap();
+    assert!(!rep.facts.is_intact());
+    let all = rep.notes.join(" | ");
+    assert!(
+        all.contains("damaged") && all.contains("format this version cannot read"),
+        "{all}"
     );
 }

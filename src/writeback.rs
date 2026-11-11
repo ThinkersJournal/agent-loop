@@ -361,6 +361,76 @@ pub fn recover_unfinished(
     Ok(verdict)
 }
 
+/// What a resumed session learned about its workspace, ready to show a person or put in the model's context.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ResumeReport {
+    /// The facts **after** any recovery that was recorded.
+    pub facts: ResumeFacts,
+    pub recovery: Recovery,
+    /// Plain-language lines, one per thing the person should know. Empty means nothing is wrong that the record can show; it does
+    /// not rule out a record lost whole at the end (`docs/RUN-RECORD.md` 4).
+    pub notes: Vec<String>,
+}
+
+/// The host-side resume step (`docs/RUN-RECORD.md` 6, item 3): read the records, settle an unfinished write-back against the real
+/// tree with [`recover_unfinished`], and say in words what was found. Damage is reported, never trusted; a partly applied
+/// write-back is reported and not retried.
+pub fn check_resume(
+    records: &dyn Records,
+    session: &str,
+    base: &Manifest,
+    work_manifest: &Manifest,
+    real: &impl RealTree,
+) -> Result<ResumeReport, RecordsError> {
+    let before = records.resume_facts(session)?;
+    let recovery = recover_unfinished(records, session, &before, base, work_manifest, real)?;
+    let facts = match recovery {
+        // A verdict was recorded: read again so `unfinished` is the truth now.
+        Recovery::Applied | Recovery::NotApplied => records.resume_facts(session)?,
+        _ => before,
+    };
+    let mut notes = Vec::new();
+    if !facts.torn.is_empty() {
+        notes.push(format!(
+            "record(s) {:?} are damaged and were not trusted",
+            facts.torn
+        ));
+    }
+    for g in &facts.gaps {
+        notes.push(format!("record(s) {}..={} are missing", g.start(), g.end()));
+    }
+    if !facts.unknown.is_empty() {
+        notes.push(format!(
+            "record(s) {:?} are in a format this version cannot read",
+            facts.unknown
+        ));
+    }
+    match &recovery {
+        Recovery::NothingPending => {}
+        Recovery::Applied => notes.push(
+            "an interrupted write-back was found already applied to the real tree".into(),
+        ),
+        Recovery::NotApplied => notes.push(
+            "an interrupted write-back had not been applied; it is safe to propose again".into(),
+        ),
+        Recovery::Partial {
+            written,
+            untouched,
+            other,
+        } => notes.push(format!(
+            "an interrupted write-back is PARTLY applied (written {written:?}, untouched {untouched:?}, changed otherwise {other:?}); it was not retried, a person must decide"
+        )),
+        Recovery::Unjudgeable => notes.push(
+            "an unfinished write-back could not be checked, because the working copy no longer matches it; it was not retried".into(),
+        ),
+    }
+    Ok(ResumeReport {
+        facts,
+        recovery,
+        notes,
+    })
+}
+
 /// The tool as a [`ToolHost`]: offered only in `CopyBack` and not when the policy denies.
 pub struct WriteBackTool<W, R, A, L> {
     pub mode: WorkspaceMode,
