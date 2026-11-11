@@ -6,7 +6,7 @@
 //! Slices 1-3: the seams, an in-memory store, a driver that snapshots at step boundaries, the idempotency
 //! [`Journal`], a [`RunControl`] handle (soft stop, inject, durable inject through an [`Inbox`]), and typed
 //! [`Event`]s with a [`Status`] fold, a [`Hook`] (stop, allow/patch/deny a tool, rewrite its outcome, wrap-up), and a [`ContextPolicy`] (what each call sends).
-//! Disk-backed [`FileStore`] and [`FileInbox`] are here. Not yet here: summarising dropped turns.
+//! [`BlobStore`] and [`BlobInbox`] (over PersistAnt) and the power-loss-careful [`FileStore`] and [`FileInbox`] are here. Not yet here: summarising dropped turns.
 //! The run handle ([`Run`]) and its settings ([`RunConfig`]) are our own types; the `Model`, `ToolHost` and `ContextPolicy` traits
 //! still name rig-core types (`docs/WRAP.md`, stages 2 and 3, waiting for a consumer). A saved session is the engine's: a different
 //! engine cannot resume it.
