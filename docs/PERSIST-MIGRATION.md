@@ -1,6 +1,6 @@
 # Moving `FileStore` and `FileInbox` onto PersistAnt (design note)
 
-Status: **proposal, nothing built.** PM notice 2026-11-11 ("schedule moving them onto the same need set after the run record is
+Status: **built (slices 1 to 3, 0.1.10 to 0.1.12); rulings recorded in section 7.** PM notice 2026-11-11 ("schedule moving them onto the same need set after the run record is
 built, as rows, design first, one PR each"): `FileStore` and `FileInbox` (`file.rs`, 0.0.24) are private disk backends, which
 CireSnave's rule forbids (*"All of our projects should adopt PersistAnt for persistence"*, `CIRESNAVE-EXPECTATIONS.md` 1069, and the
 exception at 1070: where a project cannot, the lane states the gap as a roadmap row with an owner). The run record is built
@@ -78,16 +78,15 @@ a new id, which the idempotency `Journal` cannot recognise**. With `Process` dur
 3. Do not delete anything now. Deleting `FileStore` would trade a stronger snapshot flush for rule compliance without anyone having
    said that trade is acceptable.
 
-## 5. Slices (each its own PR, none started)
+## 5. Slices (each its own PR; 1 to 3 built, 4 scheduled)
 
 1. `KeyedBlobs::delete` (defaulted) and `BlobStore`, with `MemoryBlobs` and a real `fs` PersistAnt store in the tests, including a
    torn newest snapshot (fallback), a torn claim (the precise error, then `clear_torn`), and two writers (the second gets `Conflict`).
 2. `BlobInbox` with `prune` and `torn`, same tests, and the existing `FileInbox` tests ported as a shared suite run against both.
 3. README and doc updates: which backend to use when, and the gap row. No code removed.
 
-**Built so far:** slice 1 (`KeyedBlobs::delete`, defaulted, and `BlobStore`) on the recommendations above: a damaged claim fails
-closed and `clear_torn` is explicit. Those two points are still unruled; if the PM chooses differently the change is in `save`.
-Slices 2 and 3 are not started, and nothing was removed.
+**Built:** slice 1 (#36, `KeyedBlobs::delete` defaulted, `BlobStore`), slice 2 (#37, `BlobInbox`), slice 3 (this change: README and docs).
+Nothing was removed: `FileStore` and `FileInbox` stay. Slice 4 (the `Journal` in `BlobStore`, ruling 3 in section 7) is next.
 
 ## 6. Open questions (for the PM, not decided)
 
@@ -97,3 +96,24 @@ Slices 2 and 3 are not started, and nothing was removed.
 3. The idempotency `Journal` is persisted "wherever the session is persisted" by the host (`journal.rs`); should `BlobStore` also
    hold it, so the host does not have to find another place? Not in this note's slices.
 4. Who logs the roadmap row of section 4.2 (the PM asked the PersistAnt lane for the records gap; this adds snapshots and the inbox)?
+
+## 7. Rulings (PM, 2026-11-11, peer message; not a CireSnave ruling)
+
+1. Build `BlobStore`/`BlobInbox` and **keep `FileStore`/`FileInbox`** as the power-loss-careful default until PersistAnt has a
+   `Machine` blob backend (gap logged by the PM as row 33). Question 1 above is answered this way.
+2. Torn claim: explicit `BlobStore::clear_torn`, fail closed (question 2). `WriteBackTool` stays as a second tool type.
+3. Question 3: keep the idempotency `Journal` in `BlobStore`, **one hash-checked blob per sequence number**, so the host does not have
+   to find another place for it; revisit only if PersistAnt gains an append-only log primitive. Scheduled as **slice 4** (not built by
+   this change): `journal/<session>/<seq>` created if absent, `load` returns the newest verified one.
+4. Question 4: the owner of the gap row is **PersistAnt**: its ROADMAP row 33 (a `Machine`-durability blob backend), logged by that
+   lane. This note links to it; agent-loop removes `FileStore`/`FileInbox` only after that row is delivered **and** the PM rules it.
+
+## 8. Which backend to use
+
+| Need | Use |
+|---|---|
+| Default, PersistAnt-backed, `Process` durability (a crash loses at most the newest value; damage is detected by hash) | `BlobStore` / `BlobInbox` over `PersistBlobs` (feature `persistant`), or any `KeyedBlobs` |
+| A power cut must not lose the newest snapshot or message | `FileStore` / `FileInbox` (`sync_all` before publishing; not power-cut tested) |
+| Tests, a single process | `MemoryStore` / `MemoryInbox` |
+
+Remove `FileStore`/`FileInbox` only when a PersistAnt blob backend offers `Machine` durability **and** the PM rules it.
