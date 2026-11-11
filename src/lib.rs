@@ -14,6 +14,7 @@
 mod blobinbox;
 mod blobstore;
 mod changeset;
+mod commandpolicy;
 mod context;
 mod control;
 mod driver;
@@ -35,6 +36,7 @@ pub use changeset::{
     ApplyError, Change, ChangeSet, Conflict, FileStamp, Kind, Manifest, RealTree, Reason, WorkCopy,
     apply, diff, hash_bytes,
 };
+pub use commandpolicy::{CommandPolicy, CommandPolicyError};
 pub use context::{ContextPolicy, KeepRecent, Summarise};
 pub use control::RunControl;
 pub use driver::{Driver, DriverError, End, Model, ToolHost, ToolOutcome};
