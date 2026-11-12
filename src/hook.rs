@@ -12,7 +12,27 @@
 //! What a hook changes is what the *tool* and the *model* see for this call; the run's recorded tool-call arguments are the
 //! model's own and are not rewritten.
 
-use crate::driver::ToolOutcome;
+/// What a tool call produced. A tool failure is a result the model sees, not a loop error.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolOutcome {
+    pub text: String,
+    pub is_error: bool,
+}
+
+impl ToolOutcome {
+    pub fn ok(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            is_error: false,
+        }
+    }
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            is_error: true,
+        }
+    }
+}
 
 /// A tool call about to run (or just run).
 #[derive(Clone, Copy, Debug)]
