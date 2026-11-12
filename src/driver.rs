@@ -34,27 +34,7 @@ pub trait Model {
     ) -> impl Future<Output = Result<CompletionStream, ProviderError>>;
 }
 
-/// What a tool call produced. A tool failure is a result the model sees, not a loop error.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ToolOutcome {
-    pub text: String,
-    pub is_error: bool,
-}
-
-impl ToolOutcome {
-    pub fn ok(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            is_error: false,
-        }
-    }
-    pub fn error(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            is_error: true,
-        }
-    }
-}
+pub use crate::hook::ToolOutcome;
 
 /// The C|D seam: the tools offered to the model, and running one call.
 pub trait ToolHost {

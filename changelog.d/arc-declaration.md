@@ -1,0 +1,3 @@
+kind: `[architecture]` declaration; `ToolOutcome` moved to `src/hook.rs`
+---
+Adds the `[architecture]` table to `.coderipper.toml` (21 components, 4 layers, no waivers) and `docs/ARCHITECTURE.md` with the disposition of the census findings. Breaks the `driver` <-> `hook` cycle (MOD-002) by defining `ToolOutcome` in `src/hook.rs` and re-exporting it from `src/driver.rs`; no public path changes. Verified: `cargo test` and coderipper 0.43.20 ARC-001/002 and MOD-002 after the change.

@@ -1,0 +1,127 @@
+# The `[architecture]` declaration (ARC/MOD programme, CireSnave 2026-11-12). NORMATIVE: it says where things should sit.
+# Components are the top-level modules of the one crate. Layers are bottom first: a component may depend on its own layer or
+# any layer below it. Measured 2026-11-12 at main 3b3c7e9 by scanning `crate::<top>::` paths (not a type-resolved graph).
+# Owner: the agent-loop lane.
+[architecture]
+style = "layered"
+
+[[architecture.component]]
+name = "argtext"
+paths = ["src/argtext.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "changeset"
+paths = ["src/changeset.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "context"
+paths = ["src/context.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "events"
+paths = ["src/events.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "hook"
+paths = ["src/hook.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "inbox"
+paths = ["src/inbox.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "run"
+paths = ["src/run.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "store"
+paths = ["src/store.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "workspace"
+paths = ["src/workspace.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "file"
+paths = ["src/file.rs"]
+role = "adapter"
+
+[[architecture.component]]
+name = "records"
+paths = ["src/records.rs"]
+role = "adapter"
+
+[[architecture.component]]
+name = "blobstore"
+paths = ["src/blobstore.rs"]
+role = "adapter"
+
+[[architecture.component]]
+name = "blobinbox"
+paths = ["src/blobinbox.rs"]
+role = "adapter"
+
+[[architecture.component]]
+name = "control"
+paths = ["src/control.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "driver"
+paths = ["src/driver.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "commandpolicy"
+paths = ["src/commandpolicy.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "networkpolicy"
+paths = ["src/networkpolicy.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "pathpolicy"
+paths = ["src/pathpolicy.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "secretpolicy"
+paths = ["src/secretpolicy.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "journal"
+paths = ["src/journal.rs"]
+role = "policy"
+
+[[architecture.component]]
+name = "writeback"
+paths = ["src/writeback.rs"]
+role = "policy"
+
+[[architecture.layer]]
+name = "foundation"
+components = ["argtext", "changeset", "context", "events", "hook", "inbox", "run", "store", "workspace"]
+
+[[architecture.layer]]
+name = "stores"
+components = ["file", "records", "blobstore", "blobinbox"]
+
+[[architecture.layer]]
+name = "core"
+components = ["control", "driver"]
+
+[[architecture.layer]]
+name = "extensions"
+components = ["commandpolicy", "networkpolicy", "pathpolicy", "secretpolicy", "journal", "writeback"]
