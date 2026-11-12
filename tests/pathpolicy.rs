@@ -210,3 +210,32 @@ async fn a_denied_call_never_reaches_the_tool_and_the_model_sees_why() {
         "{second}"
     );
 }
+
+#[test]
+fn examples_are_checked_at_load_and_stay_optional() {
+    let head = "[[path]]\ndeny = [\".git\", \"tools/hooks\"]\njustification = \"j\"\n";
+    // Agreeing examples load; no examples still loads.
+    PathPolicy::from_toml(&format!(
+        "{head}match = [\".git/config\", \"Tools/Hooks/pre-push\"]\nnot_match = [\"src/.git-notes\", \"tools/other\"]\n"
+    ))
+    .unwrap();
+    PathPolicy::from_toml(head).unwrap();
+    for (extra, needle) in [
+        ("match = [\"src/main.rs\"]\n", "not denied"),
+        ("not_match = [\".git/HEAD\"]\n", "is denied"),
+        ("match = [\"/etc/passwd\"]\n", "workspace-relative"),
+        ("not_match = [\"../x\"]\n", "workspace-relative"),
+        ("match = [\"\"]\n", "workspace-relative"),
+    ] {
+        match PathPolicy::from_toml(&format!("{head}{extra}")) {
+            Err(PathPolicyError::Rule(m)) => assert!(m.contains(needle), "{extra}: {m}"),
+            other => panic!("{extra}: {:?}", other.map(|_| ())),
+        }
+    }
+    // An example is judged by its own rule only: a path denied by another rule is not a `match` of this one.
+    let two = "[[path]]\ndeny = [\"a\"]\njustification = \"j\"\nmatch = [\"b/x\"]\n\n[[path]]\ndeny = [\"b\"]\njustification = \"j\"\n";
+    assert!(matches!(
+        PathPolicy::from_toml(two),
+        Err(PathPolicyError::Rule(_))
+    ));
+}
