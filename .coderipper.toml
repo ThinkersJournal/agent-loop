@@ -9,46 +9,55 @@ style = "layered"
 name = "argtext"
 paths = ["src/argtext.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "changeset"
 paths = ["src/changeset.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "context"
 paths = ["src/context.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "events"
 paths = ["src/events.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "hook"
 paths = ["src/hook.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "inbox"
 paths = ["src/inbox.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "run"
 paths = ["src/run.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "store"
 paths = ["src/store.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "workspace"
 paths = ["src/workspace.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "file"
@@ -74,11 +83,13 @@ role = "adapter"
 name = "control"
 paths = ["src/control.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "driver"
 paths = ["src/driver.rs"]
 role = "policy"
+volatility = "stable"
 
 [[architecture.component]]
 name = "commandpolicy"
@@ -125,3 +136,14 @@ components = ["control", "driver"]
 [[architecture.layer]]
 name = "extensions"
 components = ["commandpolicy", "networkpolicy", "pathpolicy", "secretpolicy", "journal", "writeback"]
+
+# What is volatile: the vendor crates the loop is built on, and the optional storage feature. context, driver, run, journal and
+# writeback do use rig_core / rig_agent today (the traits are ours, the message and tool types are rig's): ARC-003 counts that.
+[architecture.volatile]
+names = []
+namespaces = ["rig_agent", "rig_core", "persistant", "opendal"]
+feature_cfg_in_policy = true
+
+# Public items per component (ARC-006). Set from the measured count; a budget is a ceiling to hold, not a target.
+[architecture.api_budget]
+driver = 60
