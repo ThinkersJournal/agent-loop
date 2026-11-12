@@ -11,6 +11,7 @@
 //! still name rig-core types (`docs/WRAP.md`, stages 2 and 3, waiting for a consumer). A saved session is the engine's: a different
 //! engine cannot resume it.
 
+mod argtext;
 mod blobinbox;
 mod blobstore;
 mod changeset;
@@ -23,9 +24,11 @@ mod file;
 mod hook;
 mod inbox;
 mod journal;
+mod networkpolicy;
 mod pathpolicy;
 mod records;
 mod run;
+mod secretpolicy;
 mod store;
 mod workspace;
 mod writeback;
@@ -45,6 +48,7 @@ pub use file::{FileInbox, FileStore};
 pub use hook::{Hook, ModelDecision, StopReason, ToolCall, ToolDecision};
 pub use inbox::{Inbox, InboxError, MemoryInbox, Queued};
 pub use journal::Journal;
+pub use networkpolicy::{NetworkPolicy, NetworkPolicyError};
 pub use pathpolicy::{PathPolicy, PathPolicyError};
 pub use records::{
     KeyedBlobs, Listing, MemoryBlobs, MemoryRecords, RecordLog, Records, RecordsError, ResumeFacts,
@@ -53,6 +57,7 @@ pub use records::{
 #[cfg(feature = "persistant")]
 pub use records::{PersistBlobs, records_needs};
 pub use run::{Run, RunConfig};
+pub use secretpolicy::{SecretPolicy, SecretPolicyError};
 pub use store::{MemoryStore, SessionStore, StoreError};
 pub use workspace::{
     ApprovalStore, MemoryApprovals, PolicyError, Sandbox, SandboxError, Selection, Why, Workspace,
