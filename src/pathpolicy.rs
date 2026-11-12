@@ -18,6 +18,9 @@
 //! **Fail closed on shape.** Paths are workspace-relative. A path that is absolute (a leading `/` or `\`, or a drive letter) or
 //! that has a `..` component is denied outright, as outside the workspace, whatever the rules say. Matching is on whole path
 //! components, ignores case (the real trees are on Windows) and treats `\` as `/`; `src/.gitx` does not match `.git`.
+//! A rule may list `match` and `not_match` example paths; they are checked when the file loads (a `match` path must be denied by
+//! that rule's own entries, a `not_match` path must not), and a file whose examples disagree does not load. Unlike
+//! [`CommandPolicy`](crate::CommandPolicy) they are optional here, so files written before examples existed still load.
 //! A malformed file is an error, never an empty rule set: unknown keys, an empty `deny`, an empty entry or a missing
 //! justification are all refused.
 
@@ -55,6 +58,10 @@ struct File {
 struct RuleDef {
     deny: Vec<String>,
     justification: String,
+    #[serde(default, rename = "match")]
+    matches: Vec<String>,
+    #[serde(default)]
+    not_match: Vec<String>,
 }
 
 struct Rule {
@@ -102,19 +109,38 @@ impl PathPolicy {
             if def.deny.is_empty() {
                 return Err(PathPolicyError::Rule("`deny` lists no paths".into()));
             }
-            for entry in def.deny {
-                let comps = components(&entry)
-                    .filter(|c| !c.is_empty())
-                    .ok_or_else(|| {
-                        PathPolicyError::Rule(format!(
-                            "{entry:?} is empty, absolute or has `..`; entries are workspace-relative"
-                        ))
-                    })?;
+            let mut entries: Vec<Vec<String>> = Vec::new();
+            for entry in &def.deny {
+                let comps = components(entry).filter(|c| !c.is_empty()).ok_or_else(|| {
+                    PathPolicyError::Rule(format!(
+                        "{entry:?} is empty, absolute or has `..`; entries are workspace-relative"
+                    ))
+                })?;
+                entries.push(comps.clone());
                 rules.push(Rule {
                     components: comps,
-                    shown: entry,
+                    shown: entry.clone(),
                     justification: def.justification.clone(),
                 });
+            }
+            // Examples are tests (SANDBOX 5.1): each `match` path must fall under one of this rule's own entries and each
+            // `not_match` path must not. An example must be a plain workspace-relative path, or it would pass or fail on its shape.
+            let shown = def.deny.join(", ");
+            for (list, want) in [(&def.matches, true), (&def.not_match, false)] {
+                for ex in list {
+                    let comps = components(ex).filter(|c| !c.is_empty()).ok_or_else(|| {
+                        PathPolicyError::Rule(format!(
+                            "[{shown}]: example {ex:?} is empty, absolute or has `..`; examples are workspace-relative"
+                        ))
+                    })?;
+                    if entries.iter().any(|e| comps.starts_with(e)) != want {
+                        return Err(PathPolicyError::Rule(format!(
+                            "[{shown}]: example {ex:?} is listed in `{}` but is {}",
+                            if want { "match" } else { "not_match" },
+                            if want { "not denied" } else { "denied" }
+                        )));
+                    }
+                }
             }
         }
         Ok(Self {
