@@ -11,6 +11,7 @@
 //! still name rig-core types (`docs/WRAP.md`, stages 2 and 3, waiting for a consumer). A saved session is the engine's: a different
 //! engine cannot resume it.
 
+mod antspawn;
 mod argtext;
 mod blobinbox;
 mod blobstore;
@@ -33,6 +34,10 @@ mod store;
 mod workspace;
 mod writeback;
 
+pub use antspawn::{
+    AntSpawnSandbox, AntSpawnSession, Applied, ChildLines, ExecResult, Lines, PathWhy,
+    SessionError, Staged, StagedFile,
+};
 pub use blobinbox::BlobInbox;
 pub use blobstore::BlobStore;
 pub use changeset::{
