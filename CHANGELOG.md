@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.21] — docs: `ROADMAP.md` added
+
+Adds `ROADMAP.md`: every row either done, naming the `cargo test` command that shows it, or open, naming its blocker, plus a table of each README headline claim with the command that shows it. Written at 225e369 after `cargo test --all-features` passed with exit 0 (every test binary `ok`, 0 failed, 0 ignored). No code change. Rows cite test files by name; whether a given test exercises the whole claim in its row was not audited test by test.
+
 ## [0.1.20] — chore: portfolio workflow pinned to CodeRipper 0.47.5
 
 `.github/workflows/ci.yml` now calls `ciresnave/coderipper/.github/workflows/portfolio.yml` at `c72a6e03479d914de8ea8a73609ba73e93a0de92` (was `33cc3b7e4ab9305b5244092842fc7f6f6b686983`), which installs CodeRipper 0.47.5. The rule-id migration tool (`tools/migrate-rule-ids.py` at coderipper `c72a6e0`) reports "nothing to migrate": `.coderipper.toml` has no `check =` or `blocking =` entries and no workflow passes `--skip-rule`. No code change. The 0.47.5 portfolio job failed on `EFX-001 not run` (no component tagged `pure`), so `.coderipper.toml` now says `[architecture] none = ["pure", "composition"]`: no component is declared pure, and the library has no composition root in `src/`. That replaces the placeholder `[architecture.composition] roots = ["examples"]` (no such directory), which `none = ["composition"]` makes redundant (the 0.43.77 changelog calls an input both listed and declared a configuration error; not tested here).
