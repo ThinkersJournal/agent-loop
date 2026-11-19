@@ -90,7 +90,7 @@ pub struct ChangeSet {
 }
 
 /// A plain relative path: non-empty, no root or drive, no `.` or `..` or empty segment, no backslash or NUL.
-fn plain(path: &str) -> bool {
+pub(crate) fn plain(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(['\\', '\0'])
         && !path.starts_with('/')
@@ -101,7 +101,7 @@ fn plain(path: &str) -> bool {
 }
 
 /// Matching is case-insensitive: the real tree may be on a case-insensitive filesystem.
-fn holds_for(path: &str, kind: Kind) -> BTreeSet<Reason> {
+pub(crate) fn holds_for(path: &str, kind: Kind) -> BTreeSet<Reason> {
     let lower = path.to_ascii_lowercase();
     let segs: Vec<&str> = lower.split('/').collect();
     let name = *segs.last().unwrap_or(&"");
