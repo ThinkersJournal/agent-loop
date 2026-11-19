@@ -11,8 +11,8 @@
 //!
 //! The reviewed set comes back with AntSpawn's own `set_hash` (a different byte format from [`crate::ChangeSet::hash`]);
 //! `apply` must be given that hash. This module does not decide what a person must approve: it surfaces AntSpawn's
-//! `refused` and `later_step` lists and sends back only the `deletes`/`protected` paths the caller passes. Bridging a
-//! [`Staged`] into the write-back tool's `ChangeSet` and `Ask` is a later slice.
+//! `refused` and `later_step` lists and sends back only the `deletes`/`protected` paths the caller passes. The bridge into the
+//! write-back `ChangeSet` and `Ask` is [`crate::write_back_staged`].
 
 use std::collections::BTreeSet;
 use std::fmt;

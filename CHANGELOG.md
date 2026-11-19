@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.22] — feat: `write_back_staged`, write-back through an AntSpawn copy-back session (B1/B2 slice 5)
+
+Adds `src/stagedwriteback.rs`: `change_set_from_staged` turns a `Staged` into the `ChangeSet` a person is asked about (holds are this crate's rules plus AntSpawn's own `refused` list; no base hashes, so every `base` is `None`), and `write_back_staged` fetches the changes, asks the `Approver` under AntSpawn's own `set_hash`, and sends `apply` with exactly the approved deletes (`deletes`) and other approved held paths (`protected`). A held path not approved by name sends no `apply`; a bind session and `WritePolicy::Deny` are refused before anything is sent; a conflict or refusal AntSpawn reports comes back as `ApplyError::Conflict` (both hashes `None`) or `ApplyError::Refused`. Ledger lines match `write_back`. `changeset::plain` and `holds_for` become `pub(crate)`. Declares the `stagedwriteback` component (adapter, extensions layer) in `.coderipper.toml`. Verified by 11 tests in `tests/stagedwriteback.rs` against a scripted fake written from AntSpawn's `docs/SESSION-PLAN.md`: **not run against a real `spawn`**, and not wired into `WriteBackTool` or the run record.
+
 ## [0.1.21] — docs: `ROADMAP.md` added
 
 Adds `ROADMAP.md`: every row either done, naming the `cargo test` command that shows it, or open, naming its blocker, plus a table of each README headline claim with the command that shows it. Written at 225e369 after `cargo test --all-features` passed with exit 0 (every test binary `ok`, 0 failed, 0 ignored). No code change. Rows cite test files by name; whether a given test exercises the whole claim in its row was not audited test by test.

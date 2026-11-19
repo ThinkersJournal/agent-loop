@@ -1,6 +1,6 @@
 # agent-loop roadmap
 
-State measured at `origin/main` 225e369 (0.1.20, 2026-11-16): `cargo test --all-features` exit 0, every test binary `ok`, 0 failed, 0 ignored.
+State: every other row was first measured at `origin/main` 225e369 (0.1.20, 2026-11-16); the whole suite, with W6's tests, was re-run on the W6 branch: `cargo test --all-features` exit 0, every binary `ok`, 0 failed, 0 ignored; clippy `-D warnings` and `cargo doc` clean.
 A "done" row names the command that shows it; an "open" row names what it waits on. "Done" means built and tested against our own fakes
 unless the row says otherwise: nothing here has run against a real model provider, a real `spawn` binary or the real AntSpawn account.
 
@@ -28,8 +28,9 @@ Ruled by CireSnave 2026-11-06 (board 373 Q2), verbatim: *"373: B1 and B2.  I'd l
 | W2 | Workspace modes B1 (bind) and B2 (copy-back) as one setting, `Sandbox` trait | done as types and fakes | `cargo test --test workspace` |
 | W3 | `AntSpawnSession` client for `spawn session`'s JSON lines (exec, changes, apply, close) and `AntSpawnSandbox` | done against a scripted fake written from AntSpawn's `docs/SESSION-PLAN.md`; **not run against a real `spawn`** | `cargo test --test antspawn` |
 | W4 | Run W3 against a real `spawn` and the real account | open | blocked on CireSnave (the account) and AntSpawn |
-| W5 | Copy-mode `changes`/`apply` on AntSpawn's CLI protocol, and the byte format of its `set_hash` | open | asked of AntSpawn; reply awaited (a `synapse fetch` for an antspawn message) |
-| W6 | Bridge `Staged` into the write-back tool's `ChangeSet`/`Ask` (AntSpawn's `set_hash` differs from ours; `Staged` has no base hashes, so the write-back conflict check stands in) | open | this lane; not started |
+| W5 | Copy-mode `changes`/`apply` on AntSpawn's CLI protocol; the `set_hash` byte format | the lines and the byte format are in AntSpawn's `docs/SESSION-PLAN.md` on its `origin/main` (read 2026-11-20; the `set_hash` format there is SHA-256 over `A`/`M`/`D` lines); our client does not recompute it, it forwards AntSpawn's | open: no reply from the antspawn lane to the question asked 2026-11-16, so whether that doc is final is unconfirmed |
+| W6 | Bridge `Staged` into the write-back tool's `ChangeSet`/`Ask`: `change_set_from_staged`, `write_back_staged` (the person sees AntSpawn's `set_hash`; approved deletes go in `deletes`, other approved held paths in `protected`; `Staged` has no base hashes, so AntSpawn's own conflict check stands in) | done against the scripted fake; **not run against a real `spawn`**; not wired into `WriteBackTool` or the run record (`write_back_recorded` analogue not built) | `cargo test --test stagedwriteback` |
+| W8 | A recorded variant of `write_back_staged` (intent before `apply`, done after, as `write_back_recorded`) and a `workspace_writeback` tool over a session | open | this lane; not started |
 | W7 | Protected-path and build-script lists for change sets | open | the PM's proposal (`docs/SANDBOX.md` 5.6), not a ruling; also AntSpawn's unmeasured cases (rename or mkdir in a denied path, junction `.git`, a crash leaving the grant) |
 | X1 | Wrap `Model`/`ToolHost`/`ContextPolicy` so rig-core types stop leaking (`docs/WRAP.md`, option C stage 1 only) | stage 1 done; stages 2 and 3 open | stages 2 and 3 wait for a consumer; not built on purpose |
 | X2 | Persist the summary across a resume | open, not built on purpose | no consumer yet |

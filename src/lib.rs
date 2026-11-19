@@ -30,6 +30,7 @@ mod pathpolicy;
 mod records;
 mod run;
 mod secretpolicy;
+mod stagedwriteback;
 mod store;
 mod workspace;
 mod writeback;
@@ -63,6 +64,7 @@ pub use records::{
 pub use records::{PersistBlobs, records_needs};
 pub use run::{Run, RunConfig};
 pub use secretpolicy::{SecretPolicy, SecretPolicyError};
+pub use stagedwriteback::{change_set_from_staged, write_back_staged};
 pub use store::{MemoryStore, SessionStore, StoreError};
 pub use workspace::{
     ApprovalStore, MemoryApprovals, PolicyError, Sandbox, SandboxError, Selection, Why, Workspace,
