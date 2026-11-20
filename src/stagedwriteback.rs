@@ -19,11 +19,17 @@
 //! fake.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::antspawn::{AntSpawnSession, Lines, SessionError, Staged};
 use crate::changeset::{ApplyError, Change, ChangeSet, Conflict, Kind, Reason, holds_for, plain};
+use crate::driver::{ToolHost, ToolOutcome};
+use crate::records::{Records, WorkspaceRecord};
 use crate::workspace::WorkspaceMode;
-use crate::writeback::{Approver, Decision, Ledger, LedgerLine, WriteBack, WritePolicy};
+use crate::writeback::{
+    Approver, Decision, Ledger, LedgerLine, Recorded, TOOL_NAME, WriteBack, WritePolicy,
+    tool_definitions,
+};
 
 /// The [`ChangeSet`] a person is asked about for `staged`.
 ///
@@ -93,51 +99,130 @@ pub fn write_back_staged<L: Lines>(
     approver: &mut impl Approver,
     ledger: &mut impl Ledger,
 ) -> WriteBack {
+    run_staged(session, policy, approver, ledger, None).outcome
+}
+
+/// [`write_back_staged`] with the run record kept (`docs/RUN-RECORD.md` 3): a `writeback.intent` is appended **before** the
+/// session's `apply` is sent, and a `writeback.done` after every outcome. **Fail closed:** if the intent cannot be recorded,
+/// `apply` is not sent and the outcome is `Refused`.
+///
+/// The intent names AntSpawn's `set_hash` and the paths of the staged set. Recovery after an interruption
+/// ([`crate::recover_unfinished`]) recomputes a change set from a working copy this crate can read; here AntSpawn holds it, so
+/// an unfinished staged intent is not judged by this crate and a person must check the real tree.
+pub fn write_back_staged_recorded<L: Lines>(
+    records: &dyn Records,
+    record_session: &str,
+    session: &mut AntSpawnSession<L>,
+    policy: WritePolicy,
+    approver: &mut impl Approver,
+    ledger: &mut impl Ledger,
+) -> Recorded {
+    run_staged(
+        session,
+        policy,
+        approver,
+        ledger,
+        Some((records, record_session)),
+    )
+}
+
+fn run_staged<L: Lines>(
+    session: &mut AntSpawnSession<L>,
+    policy: WritePolicy,
+    approver: &mut impl Approver,
+    ledger: &mut impl Ledger,
+    rec: Option<(&dyn Records, &str)>,
+) -> Recorded {
     let line = |event: &str, set_hash: &str, path: Option<&str>, outcome: String| LedgerLine {
         event: event.into(),
         set_hash: set_hash.into(),
         path: path.map(str::to_string),
         outcome,
     };
+    // Appends one record; a failure is carried, never swallowed.
+    let record = |r: WorkspaceRecord| -> Option<String> {
+        let (records, record_session) = rec?;
+        records
+            .append_record(record_session, &r)
+            .err()
+            .map(|e| e.to_string())
+    };
+    // Closes the record with `outcome` and returns `out`.
+    let finish =
+        |out: WriteBack, set_hash: &str, outcome: String, approved: Vec<String>| Recorded {
+            outcome: out,
+            record_error: record(WorkspaceRecord::Done {
+                set_hash: set_hash.into(),
+                outcome,
+                approved,
+            }),
+        };
     if session.mode() != WorkspaceMode::CopyBack {
         ledger.record(line("writeback.refused", "-", None, "not-copy-back".into()));
-        return WriteBack::Refused("write-back exists only in copy-back mode");
+        return finish(
+            WriteBack::Refused("write-back exists only in copy-back mode"),
+            "-",
+            "not-copy-back".into(),
+            vec![],
+        );
     }
     if policy == WritePolicy::Deny {
         ledger.record(line("writeback.refused", "-", None, "policy-deny".into()));
-        return WriteBack::Refused("policy denies write-back");
+        return finish(
+            WriteBack::Refused("policy denies write-back"),
+            "-",
+            "policy-deny".into(),
+            vec![],
+        );
     }
     let staged = match session.changes() {
         Ok(s) => s,
         Err(e) => {
             let error = session_error(e);
-            ledger.record(line("writeback.set", "-", None, format!("failed:{error}")));
-            return WriteBack::Failed {
-                set_hash: "-".into(),
-                error,
-            };
+            let word = format!("failed:{error}");
+            ledger.record(line("writeback.set", "-", None, word.clone()));
+            return finish(
+                WriteBack::Failed {
+                    set_hash: "-".into(),
+                    error,
+                },
+                "-",
+                word,
+                vec![],
+            );
         }
     };
     let set = change_set_from_staged(&staged);
     let set_hash = staged.set_hash.clone();
     if set.is_empty() {
         ledger.record(line("writeback.set", &set_hash, None, "empty".into()));
-        return WriteBack::Empty;
+        return finish(WriteBack::Empty, &set_hash, "empty".into(), vec![]);
     }
     if !set.refused.is_empty() {
         let error = ApplyError::Refused(set.refused.clone());
-        ledger.record(line(
-            "writeback.set",
+        let word = format!("failed:{error}");
+        ledger.record(line("writeback.set", &set_hash, None, word.clone()));
+        return finish(
+            WriteBack::Failed {
+                set_hash: set_hash.clone(),
+                error,
+            },
             &set_hash,
-            None,
-            format!("failed:{error}"),
-        ));
-        return WriteBack::Failed { set_hash, error };
+            word,
+            vec![],
+        );
     }
     let approved = match approver.ask(&set, &set_hash) {
         Decision::Deny => {
             ledger.record(line("writeback.set", &set_hash, None, "denied".into()));
-            return WriteBack::Denied { set_hash };
+            return finish(
+                WriteBack::Denied {
+                    set_hash: set_hash.clone(),
+                },
+                &set_hash,
+                "denied".into(),
+                vec![],
+            );
         }
         Decision::Approve { approved } => approved,
     };
@@ -149,17 +234,47 @@ pub fn write_back_staged<L: Lines>(
         .collect();
     if !unapproved.is_empty() {
         let error = ApplyError::Unapproved(unapproved);
-        ledger.record(line(
-            "writeback.set",
+        let word = format!("failed:{error}");
+        ledger.record(line("writeback.set", &set_hash, None, word.clone()));
+        return finish(
+            WriteBack::Failed {
+                set_hash: set_hash.clone(),
+                error,
+            },
             &set_hash,
-            None,
-            format!("failed:{error}"),
-        ));
-        return WriteBack::Failed { set_hash, error };
+            word,
+            vec![],
+        );
+    }
+    // Fail closed: the intent is durable before `apply` is sent.
+    if rec.is_some() {
+        let intent = WorkspaceRecord::Intent {
+            set_hash: set_hash.clone(),
+            paths: set.changes.iter().map(|c| c.path.clone()).collect(),
+        };
+        if let Some(e) = record(intent) {
+            ledger.record(line(
+                "writeback.refused",
+                &set_hash,
+                None,
+                "record-failed".into(),
+            ));
+            return Recorded {
+                outcome: WriteBack::Refused(
+                    "the intent could not be recorded; nothing was written",
+                ),
+                record_error: Some(e),
+            };
+        }
     }
     // Only held paths the person approved by name are sent; deletes and the rest are kept apart as AntSpawn's `apply` wants.
     let mut deletes = BTreeSet::new();
     let mut protected = BTreeSet::new();
+    let held_approved: Vec<String> = set
+        .needing_approval()
+        .iter()
+        .map(|c| c.path.clone())
+        .collect();
     for c in set.needing_approval() {
         if c.kind == Kind::Delete {
             deletes.insert(c.path.clone());
@@ -170,13 +285,17 @@ pub fn write_back_staged<L: Lines>(
     match session.apply(&set_hash, &deletes, &protected) {
         Err(e) => {
             let error = session_error(e);
-            ledger.record(line(
-                "writeback.set",
+            let word = format!("failed:{error}");
+            ledger.record(line("writeback.set", &set_hash, None, word.clone()));
+            finish(
+                WriteBack::Failed {
+                    set_hash: set_hash.clone(),
+                    error,
+                },
                 &set_hash,
-                None,
-                format!("failed:{error}"),
-            ));
-            WriteBack::Failed { set_hash, error }
+                word,
+                vec![],
+            )
         }
         Ok(applied) if applied.written() => {
             for c in set.needing_approval() {
@@ -188,10 +307,15 @@ pub fn write_back_staged<L: Lines>(
                 ));
             }
             ledger.record(line("writeback.set", &set_hash, None, "applied".into()));
-            WriteBack::Applied {
-                set_hash,
-                paths: applied.applied,
-            }
+            finish(
+                WriteBack::Applied {
+                    set_hash: set_hash.clone(),
+                    paths: applied.applied,
+                },
+                &set_hash,
+                "applied".into(),
+                held_approved,
+            )
         }
         Ok(applied) => {
             let error = if applied.refused.is_empty() {
@@ -209,13 +333,79 @@ pub fn write_back_staged<L: Lines>(
             } else {
                 ApplyError::Refused(applied.refused.into_iter().map(|w| w.path).collect())
             };
-            ledger.record(line(
-                "writeback.set",
+            let word = format!("failed:{error}");
+            ledger.record(line("writeback.set", &set_hash, None, word.clone()));
+            finish(
+                WriteBack::Failed {
+                    set_hash: set_hash.clone(),
+                    error,
+                },
                 &set_hash,
-                None,
-                format!("failed:{error}"),
+                word,
+                vec![],
+            )
+        }
+    }
+}
+
+/// The `workspace_writeback` tool over an AntSpawn copy-back session, as a [`ToolHost`]: offered only in `CopyBack` and not when
+/// the policy denies. With `records` set it keeps the run record ([`write_back_staged_recorded`]): the intent is durable before
+/// `apply` is sent, a failed intent means nothing is written and the model is told why, and a failed closing record is reported
+/// with a warning the person should hear. Without it the call is [`write_back_staged`].
+pub struct StagedWriteBackTool<L: Lines, A, G> {
+    pub session: AntSpawnSession<L>,
+    pub policy: WritePolicy,
+    pub approver: A,
+    pub ledger: G,
+    /// The run record and the session name its records belong to; `None` keeps no record.
+    pub records: Option<(Arc<dyn Records>, String)>,
+}
+
+impl<L: Lines, A: Approver, G: Ledger> ToolHost for StagedWriteBackTool<L, A, G> {
+    fn definitions(&self) -> Vec<Arc<rig_core::completion::ToolDefinition>> {
+        tool_definitions(self.session.mode(), self.policy)
+    }
+
+    async fn call(&mut self, _id: &str, name: &str, _args: &serde_json::Value) -> ToolOutcome {
+        if name != TOOL_NAME {
+            return ToolOutcome::error(format!("unknown tool {name}"));
+        }
+        let rec = match &self.records {
+            Some((records, record_session)) => write_back_staged_recorded(
+                &**records,
+                record_session,
+                &mut self.session,
+                self.policy,
+                &mut self.approver,
+                &mut self.ledger,
+            ),
+            None => Recorded {
+                outcome: write_back_staged(
+                    &mut self.session,
+                    self.policy,
+                    &mut self.approver,
+                    &mut self.ledger,
+                ),
+                record_error: None,
+            },
+        };
+        let (is_error, mut text) = match &rec.outcome {
+            WriteBack::Empty => (false, "nothing to write back".to_string()),
+            WriteBack::Refused(why) => (true, (*why).to_string()),
+            WriteBack::Denied { .. } => (true, "the person declined the write-back".into()),
+            WriteBack::Applied { paths, .. } => (false, format!("written: {}", paths.join(", "))),
+            WriteBack::Failed { error, .. } => (true, error.to_string()),
+        };
+        if let Some(e) = &rec.record_error {
+            text.push_str(&format!(
+                "
+WARNING: the run record could not be written ({e}); tell the person"
             ));
-            WriteBack::Failed { set_hash, error }
+        }
+        if is_error {
+            ToolOutcome::error(text)
+        } else {
+            ToolOutcome::ok(text)
         }
     }
 }

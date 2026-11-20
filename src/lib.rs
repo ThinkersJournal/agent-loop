@@ -64,7 +64,9 @@ pub use records::{
 pub use records::{PersistBlobs, records_needs};
 pub use run::{Run, RunConfig};
 pub use secretpolicy::{SecretPolicy, SecretPolicyError};
-pub use stagedwriteback::{change_set_from_staged, write_back_staged};
+pub use stagedwriteback::{
+    StagedWriteBackTool, change_set_from_staged, write_back_staged, write_back_staged_recorded,
+};
 pub use store::{MemoryStore, SessionStore, StoreError};
 pub use workspace::{
     ApprovalStore, MemoryApprovals, PolicyError, Sandbox, SandboxError, Selection, Why, Workspace,
