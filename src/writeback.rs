@@ -432,7 +432,10 @@ pub fn check_resume(
 }
 
 /// The one tool's definition, or none when it must not be offered.
-fn tool_definitions(mode: WorkspaceMode, policy: WritePolicy) -> Vec<Arc<ToolDefinition>> {
+pub(crate) fn tool_definitions(
+    mode: WorkspaceMode,
+    policy: WritePolicy,
+) -> Vec<Arc<ToolDefinition>> {
     if mode != WorkspaceMode::CopyBack || policy == WritePolicy::Deny {
         return vec![];
     }
