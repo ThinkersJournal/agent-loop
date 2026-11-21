@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.24] — fix: LICENSE-APACHE restored to the canonical Apache-2.0 text
+
+Section 6 now reads "except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the NOTICE file", as in the canonical text; section 9 heading and the appendix wording also follow it. The file is byte-identical (11358 bytes, git blob d645695) to LICENSE-APACHE in ciresnave/PersistAnt, which the PM named as canonical. The appendix line "Copyright 2026 Eric Evans" returns to the canonical placeholder. Verified by `git diff origin/main -- LICENSE-APACHE` and `git hash-object LICENSE-APACHE`.
+
 ## [0.1.23] — write_back_staged_recorded and StagedWriteBackTool, the recorded write-back and the workspace_writeback tool over an AntSpawn session (B1/B2 slice 6)
 
 `write_back_staged_recorded` is `write_back_staged` with the run record kept (`docs/RUN-RECORD.md` 3): a `writeback.intent` naming AntSpawn's `set_hash` and the staged paths is appended before `apply` is sent, and a `writeback.done` after every outcome. It fails closed: if the intent cannot be recorded, `apply` is not sent and the outcome is `Refused`. `StagedWriteBackTool` offers `workspace_writeback` over an `AntSpawnSession` (only in copy-back, not when the policy denies), with or without a record. `write_back_staged` is unchanged in behaviour. Verified with `cargo test --test stagedwriteback_recorded` (7 tests against a scripted fake, not a real `spawn`) and `cargo test --test stagedwriteback`; an unfinished staged intent is not judged by `recover_unfinished`, because AntSpawn holds the working copy.
