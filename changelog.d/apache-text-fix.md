@@ -1,3 +1,0 @@
-kind: fix: LICENSE-APACHE restored to the canonical Apache-2.0 text
----
-Section 6 now reads "except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the NOTICE file", as in the canonical text; section 9 heading and the appendix wording also follow it. The file is byte-identical (11358 bytes, git blob d645695) to LICENSE-APACHE in ciresnave/PersistAnt, which the PM named as canonical. The appendix line "Copyright 2026 Eric Evans" returns to the canonical placeholder. Verified by `git diff origin/main -- LICENSE-APACHE` and `git hash-object LICENSE-APACHE`.
