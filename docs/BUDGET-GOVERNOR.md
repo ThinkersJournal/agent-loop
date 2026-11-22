@@ -37,10 +37,21 @@ that the fleet policy itself (who gets how much, per day or week) stays with lay
 
 - A `BudgetPolicy` trait given the cumulative usage after each model response and returning `Continue`, `Warn(reason)` or
   `Stop(reason)`. A stop uses the existing soft-stop path (finish the batch, save, resume later), never a kill.
-- Limits are on tokens in, tokens out and an optional money figure. Money needs a price table per model; we have none, and
+- Limits are on tokens in, tokens out and an optional money figure. Token fields are `Option`: a provider that reports none
+  gives `None`, which is unknown, not 0 (same rule as `Cost::Unknown`). Cache read/write counts are not modelled (`Event::Usage`
+  carries `input` and `output` only); a cache-aware cap is a later decision, not part of this slice.
+- **Overshoot:** the check runs after a model response, so a run can exceed a cap by one turn plus that turn's tool batch
+  (a soft stop finishes the batch). A cap is a ceiling with that slack, not a hard limit.
+- **Resume:** usage is not carried across a resume today. `Event::Usage` is emitted per response and no saved state holds a
+  cumulative total (grep of `src/` at 1a8c892: only `driver.rs` and `events.rs` mention usage). A cap that spans a
+  resume needs the host to keep the running total and pass it into the policy, or a deliberate addition to saved state;
+  neither exists. Until then an in-run cap is per process, not per logical run. Money needs a price table per model; we have none, and
   prices change, so money is **off by default** and only the provider-reported cost (ACP `cost`, when present) counts.
 - The policy is a value the host passes in. No background task, no timer, no polling: it is evaluated at turn boundaries that
   already happen. This keeps it from creating standing work.
+- **Fleet cap is opt-in and reads `THROTTLE.md`.** Per `C:\Projects\CLAUDE.md` section 9, cost is a routing constraint, not a
+  stop-work order, and whether we are throttled is read from `THROTTLE.md` (default FULL SPEED). So no fleet cap is on unless
+  `THROTTLE.md` says so or a host passes a policy; nothing here defaults to stopping a lane.
 - The fleet face is the G `cost` report (already designed: cumulative, ACP `Cost` shape, omitted means unknown).
   A supervisor that sees a breach sends `SoftStop`. An adapter that cannot report cost declares `Cost::Unknown`, and the
   governor must treat unknown as unknown, not zero.
@@ -59,7 +70,7 @@ that the fleet policy itself (who gets how much, per day or week) stays with lay
 | Gap | State | Blocker | Smallest next step |
 |---|---|---|---|
 | budget-governor, in-run cap | designed (this note), not built | decision 1 | `BudgetPolicy` plus a mock-model test that a token cap stops a run and the run resumes |
-| budget-governor, fleet cap | not designed past section 3 | decisions 3 and 4; Synapse has no subscribe/topic (`HARNESS-ADAPTER.md` open question 1) | none until 3 and 4 are answered |
+| budget-governor, fleet cap | not designed past section 3 | decisions 3 and 4; opt-in via `THROTTLE.md`. (Synapse rooms are now built, so the earlier "no subscribe/topic" blocker, `HARNESS-ADAPTER.md` open question 1, is stale; not re-read here) | none until 3 and 4 are answered |
 | harness-adapter (G) | designed in `docs/HARNESS-ADAPTER.md`, nothing built | PM gate on the note; Synapse transport; codex app-server and goose-sdk method lists unread | wrapper for our own `Driver` only, after the gate |
 | eval-harness | not started, not designed | CireSnave 2026-11-01 (quoted by capant): "we're not ready to even start that yet"; what Verify scores is undefined | none; do not start |
 
